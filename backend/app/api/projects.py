@@ -6,8 +6,56 @@ from typing import List
 
 from app.models.database import Project, get_db
 from app.models.schemas import ProjectCreate, ProjectResponse
+from pydantic import BaseModel
 
 router = APIRouter(prefix="/projects", tags=["projects"])
+
+
+class GenerateProjectRequest(BaseModel):
+    paper_ids: List[str]
+
+
+@router.post("/generate", response_model=ProjectResponse)
+async def generate_project(
+    request: GenerateProjectRequest,
+    db: Session = Depends(get_db)
+):
+    """Generate a new project (Lit Review) from selected papers using the Planner Agent"""
+    from app.agents.graph import planner_node
+    from app.models.database import ProjectPhase
+    
+    # 1. Fetch Papers
+    # In a real app, we'd fetch title/abstract from DB to pass to the planner
+    # For now, we trust the ID exist or simple mock the context retrieval
+    
+    # 2. Run Planner Node
+    # We construct a mock state for the planner
+    mock_state = {
+        "query": "Generate a comprehensive literature review outline for these papers.",
+        "selected_paper_ids": request.paper_ids,
+        "lab_asset_ids": []
+    }
+    
+    result = await planner_node(mock_state)
+    outline = result.get("current_draft", {}).get("outline", "# New Research Plan")
+    
+    # 3. Create Project
+    title = f"Lit Review: Authorization & Analysis ({len(request.paper_ids)} papers)" 
+    # Logic to extract better title from outline could go here
+    
+    db_project = Project(
+        title=title,
+        description=f"Automated literature review based on {len(request.paper_ids)} sources.\n\nGenerated Plan:\n{outline[:200]}...",
+        mode="RESEARCH",
+        findings=outline, # Store full outline in findings or a new column
+        current_phase=ProjectPhase.PLANNING
+    )
+    
+    db.add(db_project)
+    db.commit()
+    db.refresh(db_project)
+    
+    return db_project
 
 
 @router.post("", response_model=ProjectResponse)

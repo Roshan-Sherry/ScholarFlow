@@ -6,7 +6,7 @@ import httpx
 from sqlalchemy.orm import Session
 
 from app.agents.state import ResearchState
-from app.core.gemini_client import gemini_client
+from app.core.ai_client import ai_client
 from app.core.config import settings
 from app.models.database import LibraryItem, LabAsset, get_db
 from app.services.vector_store import vector_store
@@ -27,8 +27,8 @@ async def router_node(state: ResearchState) -> Dict:
         "status": "processing"
     }
     
-    # Classify intent using Gemini
-    intent = await gemini_client.classify_intent(query)
+    # Classify intent using AI
+    intent = await ai_client.classify_intent(query)
     
     return {
         "intent": intent,
@@ -47,7 +47,10 @@ async def router_node(state: ResearchState) -> Dict:
 # ===== SEARCH NODE (Discovery Loop) =====
 
 async def search_node(state: ResearchState) -> Dict:
-    """Search external APIs for papers"""
+    """Search external APIs for papers with query analysis"""
+    
+    from app.services.query_analyzer import query_analyzer
+    from app.services.paper_search import search_all_sources
     
     query = state.get("refined_query") or state["query"]
     iteration = state.get("search_iteration", 0)
@@ -56,50 +59,60 @@ async def search_node(state: ResearchState) -> Dict:
     log_entry = {
         "step": "search",
         "source": "Search",
-        "message": f"Searching ArXiv for papers (iteration {iteration + 1})...",
+        "message": f"Analyzing query and searching (iteration {iteration + 1})...",
         "status": "processing"
     }
     
     try:
-        # Call ArXiv API
-        async with httpx.AsyncClient() as client:
-            response = await client.get(
-                "http://export.arxiv.org/api/query",
-                params={
-                    "search_query": f"all:{query}",
-                    "start": 0,
-                    "max_results": 10,
-                    "sortBy": "relevance",
-                    "sortOrder": "descending"
-                },
-                timeout=10.0
-            )
-            
-            # Simple XML parsing (in production, use feedparser)
-            # For now, return mock data
-            found_papers = [
-                {
-                    "title": f"Sample Paper {i} for: {query}",
-                    "authors": ["Author A", "Author B"],
-                    "year": 2024,
-                    "abstract": f"This paper discusses {query} with novel approaches...",
-                    "arxiv_id": f"2024.0000{i}",
-                    "url": f"https://arxiv.org/abs/2024.0000{i}"
-                }
-                for i in range(1, 6)
-            ]
+        # Step 1: Analyze query
+        analysis = await query_analyzer.analyze_query(query)
+        optimized_query = analysis.get("search_query", query)
+        
+        # Log query analysis
+        thought_log = {
+            "step": "search",
+            "source": "QueryAnalyzer",
+            "message": f"💡 {analysis.get('thought', 'Query analyzed')}",
+            "status": "completed"
+        }
+        
+        # Step 2: Search all sources with optimized query
+        found_papers = search_all_sources(optimized_query, max_results_per_source=5)
+        
+        # Step 3: If primary search fails, try expanded queries
+        if len(found_papers) < 3 and analysis.get("expanded_queries"):
+            for expanded_query in analysis["expanded_queries"][:2]:  # Try up to 2 expanded queries
+                additional_papers = search_all_sources(expanded_query, max_results_per_source=3)
+                found_papers.extend(additional_papers)
+                
+                if len(found_papers) >= 5:  # Stop if we have enough results
+                    break
+        
+        # Deduplicate again after combining expanded results
+        unique_papers = {}
+        for paper in found_papers:
+            title = paper.get('title') or ''
+            title_key = title.lower().strip()
+            if title_key and title_key not in unique_papers:
+                unique_papers[title_key] = paper
+        
+        found_papers = list(unique_papers.values())[:10]  # Limit to 10 total
         
         return {
             "found_papers": found_papers,
             "search_iteration": iteration + 1,
             "logs": [
                 log_entry,
+                thought_log,
                 {
                     "step": "search",
-                    "source": "Search",
-                    "message": f"✓ Found {len(found_papers)} papers",
+                    "source": "MultiSourceSearch",
+                    "message": f"✓ Found {len(found_papers)} papers from multiple sources",
                     "status": "completed",
-                    "metadata": {"count": len(found_papers)}
+                    "metadata": {
+                        "count": len(found_papers),
+                        "optimized_query": optimized_query
+                    }
                 }
             ]
         }
@@ -138,8 +151,8 @@ async def ranker_node(state: ResearchState) -> Dict:
     ranked_papers = []
     
     for paper in found_papers:
-        # Score using Gemini
-        score = await gemini_client.score_paper_relevance(
+        # Score using AI
+        score = await ai_client.score_paper_relevance(
             paper["title"],
             paper["abstract"],
             query
@@ -188,12 +201,12 @@ async def refine_query_node(state: ResearchState) -> Dict:
         "status": "processing"
     }
     
-    # Use Gemini to suggest refinement
+    # Use AI to suggest refinement
     prompt = f"""The search query "{original_query}" returned no relevant papers.
 Suggest a refined, more specific search query that might yield better results.
 Return ONLY the refined query, nothing else."""
     
-    refined = await gemini_client.generate_text(prompt, temperature=0.7, use_flash=True)
+    refined = await ai_client.generate_text(prompt, temperature=0.7, use_flash=True)
     
     return {
         "refined_query": refined.strip(),
@@ -237,9 +250,9 @@ async def lab_analyst_node(state: ResearchState) -> Dict:
             asset = db.query(LabAsset).filter(LabAsset.id == asset_id).first()
             
             if asset and asset.asset_type == "image":
-                # Analyze with Gemini Vision
+                # Analyze with AI Vision
                 if not asset.ai_description:
-                    description = await gemini_client.analyze_image(
+                    description = await ai_client.analyze_image(
                         asset.file_path,
                         prompt="Provide a detailed scientific description of this figure. Identify axes, trends, key data points, and any notable patterns."
                     )
@@ -272,23 +285,30 @@ async def lab_analyst_node(state: ResearchState) -> Dict:
 # ===== WRITER NODE (Drafting Workflow) =====
 
 async def writer_node(state: ResearchState) -> Dict:
-    """Generate academic text with citations"""
+    """Generate academic text with section-aware context blending"""
+    
+    from app.agents.prompts import format_section_prompt, get_context_weights
+    from app.models.database import ResearchAsset
     
     query = state["query"]
     selected_paper_ids = state["selected_paper_ids"]
+    research_asset_ids = state.get("research_asset_ids", [])
+    current_section = state.get("current_section", "general")
     lab_descriptions = state.get("lab_asset_descriptions", [])
     revision_count = state.get("revision_count", 0)
     critique = state.get("critique_feedback")
-    
+   
     log_entry = {
         "step": "writer",
         "source": "Writer",
-        "message": f"Drafting content (revision {revision_count})...",
+        "message": f"Drafting {current_section} section (revision {revision_count})...",
         "status": "processing"
     }
     
-    # Retrieve paper context from vector store
-    context_chunks = []
+    # === SECTION-AWARE CONTEXT GATHERING ===
+    
+    # 1. Get literature context from papers
+    literature_context = ""
     if selected_paper_ids:
         project_id = state["project_id"]
         context_chunks = await vector_store.search_similar(
@@ -297,37 +317,66 @@ async def writer_node(state: ResearchState) -> Dict:
             paper_ids=selected_paper_ids,
             top_k=5
         )
+        literature_context = "\n\n".join(context_chunks) if context_chunks else ""
     
-    # Build prompt
-    context_text = "\n\n".join(context_chunks) if context_chunks else "No papers selected."
-    lab_context = "\n".join(lab_descriptions) if lab_descriptions else ""
+    # 2. Get research context from student's assets
+    research_context = ""
+    db = next(get_db())
+    try:
+        if research_asset_ids:
+            research_assets = db.query(ResearchAsset).filter(
+                ResearchAsset.id.in_(research_asset_ids)
+            ).all()
+            
+            research_parts = []
+            for asset in research_assets:
+                asset_info = f"**{asset.name}** ({asset.asset_type})"
+                if asset.description:
+                    asset_info += f": {asset.description}"
+                if asset.methodology_note:
+                    asset_info += f"\nMethodology: {asset.methodology_note}"
+                if asset.ai_analysis:
+                    asset_info += f"\nAnalysis: {asset.ai_analysis}"
+                research_parts.append(asset_info)
+            
+            research_context = "\n\n".join(research_parts)
+        
+        # Fallback to legacy lab descriptions if no research assets
+        if not research_context and lab_descriptions:
+            research_context = "\n".join(lab_descriptions)
     
-    revision_instruction = ""
+    finally:
+        db.close()
+    
+    # === APPLY SECTION-AWARE WEIGHTING ===
+    research_weight, lit_weight = get_context_weights(current_section)
+    
+    # Add weight indicators to help the LLM prioritize
+    if research_weight > lit_weight:
+        research_context = f"**PRIMARY FOCUS** (Student's Work):\n{research_context}" if research_context else ""
+        literature_context = f"Supporting Context (Prior Work):\n{literature_context}" if literature_context else ""
+    elif lit_weight > research_weight:
+        literature_context = f"**PRIMARY FOCUS** (Prior Research):\n{literature_context}" if literature_context else ""
+        research_context = f"Supporting Context (Student's Work):\n{research_context}" if research_context else ""
+    
+    # === BUILD SECTION-SPECIFIC PROMPT ===
+    prompt = format_section_prompt(
+        current_section,
+        query,
+        literature_context=literature_context or "None provided.",
+        research_context=research_context or "None provided."
+    )
+    
+    # Add revision feedback if exists
     if critique:
-        revision_instruction = f"\n\nPREVIOUS FEEDBACK:\n{critique}\n\nPlease address this feedback in your revision."
+        prompt += f"\n\n**REVISION FEEDBACK FROM REVIEWER:**\n{critique}\n\nPlease address this feedback."
     
-    prompt = f"""You are an academic co-author writing high-quality research prose.
-
-USER REQUEST: {query}
-
-SOURCE MATERIAL:
-{context_text}
-
-LAB DATA:
-{lab_context}
-{revision_instruction}
-
-Write 2-4 paragraphs of academic text in a scholarly tone.
-Use numerical citations like [1], [2] when referencing papers.
-DO NOT include section headers, just the body text.
-"""
-    
-    # Generate text
-    draft_text = await gemini_client.generate_text(prompt, temperature=0.7)
+    # === GENERATE TEXT ===
+    draft_text = await ai_client.generate_text(prompt, temperature=0.7)
     
     return {
         "current_draft": {
-            "section": "Response",
+            "section": current_section.title() if current_section else "General",
             "content": draft_text,
             "status": "pending_review"
         },
@@ -336,8 +385,13 @@ DO NOT include section headers, just the body text.
             {
                 "step": "writer",
                 "source": "Writer",
-                "message": f"✓ Generated {len(draft_text.split())} words",
-                "status": "completed"
+                "message": f"✓ Generated {len(draft_text.split())} words for {current_section}",
+                "status": "completed",
+                "metadata": {
+                    "section": current_section,
+                    "research_weight": research_weight,
+                    "lit_weight": lit_weight
+                }
             }
         ]
     }
@@ -375,7 +429,7 @@ Respond with EITHER:
 - Or provide specific feedback for revision (2-3 sentences)
 """
     
-    review_result = await gemini_client.generate_text(prompt, temperature=0.3, use_flash=True)
+    review_result = await ai_client.generate_text(prompt, temperature=0.3, use_flash=True)
     
     is_approved = "APPROVED" in review_result.upper()
     

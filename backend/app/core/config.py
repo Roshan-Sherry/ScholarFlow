@@ -7,11 +7,23 @@ from pathlib import Path
 class Settings(BaseSettings):
     """Application settings loaded from environment variables"""
     
-    # Google Gemini API
+    # Google Gemini API (REQUIRED - must be set in .env file)
     google_api_key: str
     
     # Database
     database_url: str = "sqlite:///./data/scholarflow.db"
+
+    # Feature Flags - Set to False for production
+    mock_ai_responses: bool = False
+
+    # AI / LLM Configuration
+    llm_provider: str = "gemini"  # "gemini", "ollama", "openai"
+    text_model_name: str = "gemini-2.5-flash" # Using Flash to stay within free tier limits
+    fast_model_name: str = "gemini-2.5-flash" # or "llama3:instruct", "gpt-3.5-turbo"
+    vision_model_name: str = "gemini-2.5-flash" # Using Flash for vision too
+    
+    # Optional Custom Base URL (for Ollama/vLLM)
+    llm_base_url: str | None = None
     
     # Application
     app_env: str = "development"

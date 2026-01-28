@@ -6,7 +6,7 @@ import aiofiles
 from fastapi import UploadFile
 from sqlalchemy.orm import Session
 
-from app.core.gemini_client import gemini_client
+from app.core.ai_client import ai_client
 from app.core.config import settings
 from app.models.database import LabAsset
 
@@ -71,7 +71,7 @@ class LabAnalystService:
         ai_description: Optional[str] = None
         
         if asset_type == "image":
-            ai_description = await gemini_client.analyze_image(
+            ai_description = await ai_client.analyze_image(
                 file_path,
                 prompt="""Provide a detailed scientific description of this figure or chart.
 
@@ -119,7 +119,7 @@ Format your response as a concise paragraph suitable for referencing in academic
         
         prompt = custom_prompt or """Provide a detailed scientific description of this figure."""
         
-        new_description = await gemini_client.analyze_image(
+        new_description = await ai_client.analyze_image(
             asset.file_path,
             prompt=prompt
         )

@@ -1,15 +1,15 @@
-"""Google Gemini AI client singleton for text and vision models"""
+"""Google Gemini AI client singleton using LangChain integration"""
 
-import google.generativeai as genai
-from google.generativeai.types import GenerateContentResponse
 from typing import AsyncIterator, Optional
-import base64
 from pathlib import Path
+import base64
+from langchain_google_genai import ChatGoogleGenerativeAI
+from langchain_core.messages import HumanMessage
 from .config import settings
 
 
 class GeminiClient:
-    """Singleton client for Google Gemini API"""
+    """Singleton client for Google Gemini API via LangChain"""
     
     _instance: Optional['GeminiClient'] = None
     
@@ -20,21 +20,35 @@ class GeminiClient:
         return cls._instance
     
     def _initialize(self):
-        """Initialize Gemini API with API key"""
-        genai.configure(api_key=settings.google_api_key)
+        """Initialize LangChain Gemini models"""
         
-        # Configure models
-        self.text_model = genai.GenerativeModel('gemini-1.5-pro')
-        self.flash_model = genai.GenerativeModel('gemini-1.5-flash')
-        self.vision_model = genai.GenerativeModel('gemini-1.5-pro-vision')
+        # Common configuration
+        # Note: safety_settings can be passed here if needed, but defaults are usually fine for standard use.
+        # If strict safety settings are required, they can be added to the constructor.
         
-        # Safety settings for academic content
-        self.safety_settings = [
-            {"category": "HARM_CATEGORY_HARASSMENT", "threshold": "BLOCK_NONE"},
-            {"category": "HARM_CATEGORY_HATE_SPEECH", "threshold": "BLOCK_NONE"},
-            {"category": "HARM_CATEGORY_SEXUALLY_EXPLICIT", "threshold": "BLOCK_NONE"},
-            {"category": "HARM_CATEGORY_DANGEROUS_CONTENT", "threshold": "BLOCK_NONE"},
-        ]
+        self.text_model = ChatGoogleGenerativeAI(
+            model="gemini-2.5-pro",
+            google_api_key=settings.google_api_key,
+            temperature=0.7,
+            max_output_tokens=2048,
+            convert_system_message_to_human=True
+        )
+        
+        self.flash_model = ChatGoogleGenerativeAI(
+            model="gemini-2.5-flash",
+            google_api_key=settings.google_api_key,
+            temperature=0.7,
+            max_output_tokens=2048,
+            convert_system_message_to_human=True
+        )
+        
+        # Vision model is essentially the same class in LangChain, handled by input types
+        self.vision_model = ChatGoogleGenerativeAI(
+            model="gemini-2.5-pro", # 1.5 Pro supports vision
+            google_api_key=settings.google_api_key,
+            temperature=0.4,
+            max_output_tokens=2048
+        )
     
     async def generate_text(
         self,
@@ -46,16 +60,12 @@ class GeminiClient:
         """Generate text using Gemini Pro or Flash"""
         model = self.flash_model if use_flash else self.text_model
         
-        response = await model.generate_content_async(
-            prompt,
-            generation_config={
-                "temperature": temperature,
-                "max_output_tokens": max_tokens,
-            },
-            safety_settings=self.safety_settings
-        )
+        # Override params if different from default (LangChain models are immutable-ish, so we clone or just use bind)
+        # For simple usage, we can bind new config
+        configured_model = model.bind(temperature=temperature, max_output_tokens=max_tokens)
         
-        return response.text
+        response = await configured_model.ainvoke(prompt)
+        return response.content
     
     async def generate_text_stream(
         self,
@@ -66,61 +76,43 @@ class GeminiClient:
     ) -> AsyncIterator[str]:
         """Stream text generation from Gemini"""
         model = self.flash_model if use_flash else self.text_model
+        configured_model = model.bind(temperature=temperature, max_output_tokens=max_tokens)
         
-        response = await model.generate_content_async(
-            prompt,
-            generation_config={
-                "temperature": temperature,
-                "max_output_tokens": max_tokens,
-            },
-            safety_settings=self.safety_settings,
-            stream=True
-        )
-        
-        async for chunk in response:
-            if chunk.text:
-                yield chunk.text
+        async for chunk in configured_model.astream(prompt):
+            if chunk.content:
+                yield chunk.content
     
     async def analyze_image(
         self,
         image_path: str | Path,
         prompt: str = "Provide a detailed scientific description of this image."
     ) -> str:
-        """Analyze image using Gemini Vision
-        
-        Args:
-            image_path: Path to image file
-            prompt: Analysis prompt
-            
-        Returns:
-            Textual description/analysis of the image
-        """
+        """Analyze image using Gemini Vision via LangChain"""
         image_path = Path(image_path)
         
-        # Read image file
+        # Read image file and encode
         with open(image_path, 'rb') as f:
-            image_data = f.read()
+            image_data = base64.b64encode(f.read()).decode('utf-8')
+            
+        mime_type = f"image/{image_path.suffix.lstrip('.')}"
+        if mime_type == 'image/jpg': mime_type = 'image/jpeg'
         
-        # Prepare image for Gemini
-        image_parts = [
-            {
-                "mime_type": f"image/{image_path.suffix[1:]}",
-                "data": base64.b64encode(image_data).decode('utf-8')
-            }
-        ]
-        
-        response = await self.vision_model.generate_content_async(
-            [prompt, image_parts[0]],
-            safety_settings=self.safety_settings
+        # Construct multimodal message
+        message = HumanMessage(
+            content=[
+                {"type": "text", "text": prompt},
+                {
+                    "type": "image_url",
+                    "image_url": {"url": f"data:{mime_type};base64,{image_data}"}
+                }
+            ]
         )
         
-        return response.text
+        response = await self.vision_model.ainvoke([message])
+        return response.content
     
     async def classify_intent(self, query: str) -> str:
-        """Classify user intent for routing
-        
-        Returns: "SEARCH" | "CHAT" | "DRAFT" | "ANALYZE"
-        """
+        """Classify user intent for routing"""
         prompt = f"""Classify the following user query into ONE of these categories:
 - SEARCH: User wants to find research papers
 - DRAFT: User wants to write/generate academic text
@@ -131,12 +123,13 @@ Query: "{query}"
 
 Return ONLY the category name, nothing else."""
         
+        # Use Flash for speed
         result = await self.generate_text(prompt, temperature=0.1, use_flash=True)
         intent = result.strip().upper()
         
         if intent in ["SEARCH", "DRAFT", "ANALYZE", "CHAT"]:
             return intent
-        return "CHAT"  # Default fallback
+        return "CHAT"
     
     async def score_paper_relevance(
         self,
@@ -157,9 +150,9 @@ Return ONLY a decimal number between 0.0 and 1.0, nothing else."""
         try:
             result = await self.generate_text(prompt, temperature=0.2, use_flash=True)
             score = float(result.strip())
-            return max(0.0, min(1.0, score))  # Clamp to [0, 1]
-        except ValueError:
-            return 0.5  # Default medium relevance if parsing fails
+            return max(0.0, min(1.0, score))
+        except (ValueError, TypeError):
+            return 0.5
 
 
 # Global client instance

@@ -1,13 +1,24 @@
 """SQLAlchemy database models for persistence"""
 
-from sqlalchemy import create_engine, Column, String, Integer, DateTime, Text, Boolean, ForeignKey, Float, JSON
+from sqlalchemy import create_engine, Column, String, Integer, DateTime, Text, Boolean, ForeignKey, Float, JSON, Enum
 from sqlalchemy.ext.declarative import declarative_base
 from sqlalchemy.orm import relationship, sessionmaker
 from datetime import datetime
 from typing import Optional
 import uuid
+import enum
 
 from app.core.config import settings
+
+
+class ProjectPhase(enum.Enum):
+    """Project lifecycle phases"""
+    DISCOVERY = "discovery"      # Finding and reading papers
+    READING = "reading"           # Annotating literature
+    ANALYSIS = "analysis"         # Student conducting research
+    DRAFTING = "drafting"         # Writing manuscript
+    REVISION = "revision"         # Editing and polishing
+
 
 # Create database engine
 engine = create_engine(
@@ -37,6 +48,10 @@ class Project(Base):
     description = Column(Text)
     mode = Column(String(50), nullable=False)  # RESEARCH | MANUSCRIPT
     
+    # NEW: Project phase tracking
+    current_phase = Column(Enum(ProjectPhase), default=ProjectPhase.DISCOVERY)
+    phase_history = Column(JSON, default=list)  # Track phase transitions
+    
     # Optional context fields
     methodology = Column(Text, nullable=True)
     findings = Column(Text, nullable=True)
@@ -48,6 +63,7 @@ class Project(Base):
     # Relationships
     library_items = relationship("LibraryItem", back_populates="project", cascade="all, delete-orphan")
     lab_assets = relationship("LabAsset", back_populates="project", cascade="all, delete-orphan")
+    research_assets = relationship("ResearchAsset", back_populates="project", cascade="all, delete-orphan")  # NEW
     drafts = relationship("Draft", back_populates="project", cascade="all, delete-orphan")
     chat_sessions = relationship("ChatSession", back_populates="project", cascade="all, delete-orphan")
 
@@ -106,6 +122,38 @@ class LabAsset(Base):
     
     # Relationships
     project = relationship("Project", back_populates="lab_assets")
+
+
+class ResearchAsset(Base):
+    """Student's OWN research artifacts (experimental data, figures, protocols)"""
+    __tablename__ = "research_assets"
+    
+    id = Column(String, primary_key=True, default=lambda: str(uuid.uuid4()))
+    project_id = Column(String, ForeignKey("projects.id"), nullable=False)
+    
+    name = Column(String(255), nullable=False)
+    asset_type = Column(String(50), nullable=False)  # experiment_data | my_figure | my_code | my_table | methodology
+    description = Column(Text)  # Student's description
+    file_path = Column(String(500), nullable=False)
+    
+    # Research context
+    methodology_note = Column(Text, nullable=True)  # How this was generated
+    section_hint = Column(String(50), nullable=True)  # methods | results | discussion
+    is_included_in_draft = Column(Boolean, default=True)
+    
+    # AI analysis (optional)
+    ai_analysis = Column(Text, nullable=True)  # AI interpretation of the data/figure
+    
+    # Metadata
+    file_size = Column(Integer, nullable=True)
+    mime_type = Column(String(100), nullable=True)
+    
+    created_at = Column(DateTime, default=datetime.utcnow)
+    updated_at = Column(DateTime, default=datetime.utcnow, onupdate=datetime.utcnow)
+    
+    # Relationships
+    project = relationship("Project", back_populates="research_assets")
+
 
 
 class Draft(Base):

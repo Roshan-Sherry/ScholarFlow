@@ -26,12 +26,17 @@ class ResearchState(TypedDict):
     search_iteration: int  # Track refinement loops
     refined_query: Optional[str]  # Modified query for retry
     
-    # Lab context
+    # Lab context (legacy - kept for backward compatibility)
     lab_asset_ids: List[str]
     lab_asset_descriptions: List[str]  # AI-generated descriptions
     
+    # NEW: Student's research assets (experimental data, figures, etc.)
+    research_asset_ids: List[str]  # Student's OWN research artifacts
+    research_asset_descriptions: List[str]  # AI analysis of student's data
+    
     # Drafting workflow state
     current_draft: Dict  # {section: str, content: str, status: str}
+    current_section: Optional[str]  # NEW: Which section is being drafted (introduction, methods, results, etc.)
     critique_feedback: Optional[str]  # From reviewer agent
     revision_count: int  # Track revision loops
     needs_revision: bool  # Flag for conditional edge
@@ -50,7 +55,9 @@ def create_initial_state(
     query: str,
     project_id: str,
     selected_paper_ids: List[str] = None,
-    lab_asset_ids: List[str] = None
+    lab_asset_ids: List[str] = None,
+    research_asset_ids: List[str] = None,  # NEW
+    current_section: str = None  # NEW
 ) -> ResearchState:
     """Factory function to create initial state"""
     return {
@@ -64,7 +71,10 @@ def create_initial_state(
         "refined_query": None,
         "lab_asset_ids": lab_asset_ids or [],
         "lab_asset_descriptions": [],
+        "research_asset_ids": research_asset_ids or [],  # NEW
+        "research_asset_descriptions": [],  # NEW
         "current_draft": {},
+        "current_section": current_section,  # NEW
         "critique_feedback": None,
         "revision_count": 0,
         "needs_revision": False,
@@ -72,3 +82,4 @@ def create_initial_state(
         "logs": [],
         "error": None
     }
+

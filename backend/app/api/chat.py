@@ -34,52 +34,100 @@ async def stream_workflow(
                 query=request.message,
                 project_id=request.project_id,
                 selected_paper_ids=request.selected_paper_ids,
-                lab_asset_ids=request.lab_asset_ids
+                lab_asset_ids=request.lab_asset_ids,
+                research_asset_ids=request.research_asset_ids,  # NEW
+                current_section=request.current_section  # NEW
             )
             
             # Send start event
             yield f"data: {json.dumps({'type': 'start', 'message': 'Workflow initiated'})}\n\n"
             
+            # Track final state
+            final_response = ""
+            final_papers = []
+
             # Stream graph execution
-            async for state in research_graph.astream(initial_state):
-                # Extract logs from state
-                logs = state.get("logs", [])
-                
-                # Stream each log entry
-                for log in logs:
-                    event_data = {
-                        "type": "log",
-                        "data": log
-                    }
-                    yield f"data: {json.dumps(event_data)}\n\n"
+            async for chunk in research_graph.astream(initial_state):
+                # LangGraph astream yields {node_name: state_update} by default
+                should_break_outer_loop = False
+                for node_name, state_update in chunk.items():
+                    # DEBUG: Log state keys
+                    import logging
+                    logger = logging.getLogger(__name__)
+                    logger.info(f"Update from node: {node_name}")
+                    logger.info(f"Intent: {state_update.get('intent')}, Found papers: {len(state_update.get('found_papers', []))}, Ranked: {len(state_update.get('ranked_papers', []))}")
                     
-                    # Small delay for UI processing
-                    await asyncio.sleep(0.05)
+                    # Extract logs from state update
+                    logs = state_update.get("logs", [])
+                    
+                    # Capture papers (prefer ranked, fallback to found)
+                    if state_update.get("ranked_papers"):
+                        final_papers = state_update["ranked_papers"]
+                        logger.info(f"Captured {len(final_papers)} ranked papers")
+                    elif state_update.get("found_papers") and not final_papers:
+                        final_papers = state_update["found_papers"]
+                        logger.info(f"Captured {len(final_papers)} found papers")
+
+                    # Stream each log entry
+                    for log in logs:
+                        event_data = {
+                            "type": "log",
+                            "data": log
+                        }
+                        yield f"data: {json.dumps(event_data)}\n\n"
+                        
+                        # Small delay for UI processing
+                        await asyncio.sleep(0.05)
+                    
+                    # If draft is being generated, stream content
+                    current_draft = state_update.get("current_draft", {})
+                    if current_draft and current_draft.get("content"):
+                        content = current_draft["content"]
+                        final_response = content # Update final response
+                        logger.info(f"Captured draft content: {len(content)} chars")
+                        
+                        text_event = {
+                            "type": "text",
+                            "data": content
+                        }
+                        yield f"data: {json.dumps(text_event)}\n\n"
+                    
+                    # Check for completion
+                    if current_draft.get("status") == "completed":
+                        logger.info("Draft marked as completed, breaking loop")
+                        should_break_outer_loop = True
+                        break # Break from inner loop
+                    
+                    # Check for errors
+                    if state_update.get("error"):
+                        error_event = {
+                            "type": "error",
+                            "message": state_update["error"]
+                        }
+                        yield f"data: {json.dumps(error_event)}\n\n"
+                        should_break_outer_loop = True
+                        break # Break from inner loop
                 
-                # If draft is being generated, stream content
-                current_draft = state.get("current_draft", {})
-                if current_draft and current_draft.get("content"):
-                    text_event = {
-                        "type": "text",
-                        "data": current_draft["content"]
-                    }
-                    yield f"data: {json.dumps(text_event)}\n\n"
-                
-                # Check for completion
-                if current_draft.get("status") == "completed":
-                    break
-                
-                # Check for errors
-                if state.get("error"):
-                    error_event = {
-                        "type": "error",
-                        "message": state["error"]
-                    }
-                    yield f"data: {json.dumps(error_event)}\n\n"
-                    break
+                if should_break_outer_loop:
+                    break # Break from outer loop
             
-            # Send completion event
-            yield f"data: {json.dumps({'type': 'complete', 'message': 'Workflow completed'})}\n\n"
+            logger.info(f"FINAL STATE: response={bool(final_response)}, papers={len(final_papers)}")
+            
+            # Send completion event with final data
+            # Wrap answer in structure for frontend compatibility
+            formatted_answer = {
+                "summary": final_response,
+                "confidence": "high",
+                "notes": "Generated via ScholarFlow"
+            } if final_response else None
+
+            complete_event = {
+                'type': 'complete', 
+                'message': 'Workflow completed',
+                'answer': formatted_answer,
+                'papers': final_papers[:5]
+            }
+            yield f"data: {json.dumps(complete_event)}\n\n"
         
         except Exception as e:
             error_event = {
@@ -112,7 +160,7 @@ async def draft_section_stream(
     async def draft_generator():
         """Generator for streaming draft text"""
         
-        from app.core.gemini_client import gemini_client
+        from app.core.ai_client import ai_client
         from app.services.vector_store import vector_store
         
         # Get context
@@ -141,8 +189,7 @@ Write 2-4 paragraphs of scholarly text with citations [1], [2] where appropriate
         yield f"data: {json.dumps({'type': 'start', 'message': 'Drafting section...'})}\n\n"
         
         accumulated_text = ""
-        
-        async for chunk in gemini_client.generate_text_stream(prompt):
+        async for chunk in ai_client.generate_text_stream(prompt):
             accumulated_text += chunk
             yield f"data: {json.dumps({'type': 'text_chunk', 'data': chunk})}\n\n"
             await asyncio.sleep(0.02)

@@ -1,34 +1,58 @@
 """FastAPI application entry point"""
 
-from fastapi import FastAPI
+from fastapi import FastAPI, Request
 from fastapi.middleware.cors import CORSMiddleware
+from starlette.middleware.base import BaseHTTPMiddleware
+from starlette.responses import JSONResponse
 from contextlib import asynccontextmanager
+
+class LimitUploadSize(BaseHTTPMiddleware):
+    def __init__(self, app, max_upload_size: int) -> None:
+        super().__init__(app)
+        self.max_upload_size = max_upload_size
+
+    async def dispatch(self, request: Request, call_next):
+        if request.method == 'POST':
+            if 'content-length' in request.headers:
+                content_length = int(request.headers['content-length'])
+                if content_length > self.max_upload_size:
+                    return JSONResponse(status_code=413, content={"detail": "File too large"})
+        return await call_next(request)
 
 from app.core.config import settings
 from app.models.database import init_db
-from app.api import chat, projects, lab
+from app.api import chat, projects, lab, papers, research
+from app.core.logging import setup_logging
+import logging
 
+# Setup logging
+setup_logging()
+logger = logging.getLogger(__name__)
 
 @asynccontextmanager
 async def lifespan(app: FastAPI):
     """Application lifespan events"""
     # Startup
-    print("🚀 Initializing ScholarFlow Backend...")
+    logger.info("🚀 Initializing ScholarFlow Backend...")
     init_db()
-    print("✅ Database initialized")
-    print(f"📍 FAISS indexes: {settings.faiss_index_path}")
-    print(f"📁 Uploads: {settings.upload_path}")
+    
+    # Ensure uploads directory exists
+    settings.upload_path.mkdir(parents=True, exist_ok=True)
+    
+    # Verify Discovery Project
+    # in a real app, this logic might be in init_db, but safe to double check or rely on reset_db
+    logger.info("✅ Database initialized")
     
     yield
     
     # Shutdown
-    print("👋 Shutting down ScholarFlow Backend...")
+    logger.info("🛑 Shutting down...")
 
 
 # Create FastAPI application
 app = FastAPI(
-    title="ScholarFlow Backend API",
-    description="AI-native Research Operating System with LangGraph Multi-Agent Workflows",
+    title="ScholarFlow API",
+    description="Research Assistant Agent Backend",
     version="0.1.0",
     lifespan=lifespan
 )
@@ -37,17 +61,28 @@ app = FastAPI(
 # Configure CORS
 app.add_middleware(
     CORSMiddleware,
-    allow_origins=settings.cors_origins,
+    allow_origins=["*"],  # In production, specify frontend domain
     allow_credentials=True,
     allow_methods=["*"],
     allow_headers=["*"],
 )
 
+app.add_middleware(LimitUploadSize, max_upload_size=50 * 1024 * 1024) # 50MB limit
 
-# Include routers
-app.include_router(projects.router)
-app.include_router(lab.router)
-app.include_router(chat.router)
+
+# Include# API Routers
+app.include_router(chat.router, prefix="/api/v1")
+app.include_router(projects.router, prefix="/api/v1")
+app.include_router(lab.router, prefix="/api/v1")
+app.include_router(papers.router, prefix="/api/v1")
+app.include_router(research.router, prefix="/api/v1")
+
+# Mount Uploads for Static Access (PDF Viewer)
+from fastapi.staticfiles import StaticFiles
+import os
+
+if settings.upload_path.exists():
+    app.mount("/uploads", StaticFiles(directory=settings.upload_path), name="uploads")
 
 
 # Health check endpoint

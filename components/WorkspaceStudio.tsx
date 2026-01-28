@@ -1,8 +1,8 @@
 
 import React, { useState, useEffect, useRef } from 'react';
-import { 
-    Download, RefreshCw, Maximize, Minimize, 
-    Bold, Italic, Heading1, List, Image as ImageIcon, 
+import {
+    Download, RefreshCw, Maximize, Minimize,
+    Bold, Italic, Heading1, List, Image as ImageIcon,
     Printer, Edit3, Check, X, Sparkles, PlusCircle, Trash2,
     LayoutTemplate, Upload, ChevronDown, ChevronUp, ChevronLeft, ChevronRight, Hash, Undo2, Redo2,
     PanelRightOpen, Code, FileText
@@ -10,6 +10,7 @@ import {
 import { Project } from '../types';
 import Editor, { loader } from '@monaco-editor/react';
 import Markdown from 'react-markdown';
+import { useToastStore } from '../stores/toastStore';
 
 // --- CONSTANTS FOR A4 LAYOUT ---
 const A4_W_MM = 210;
@@ -194,14 +195,14 @@ interface WorkspaceStudioProps {
     canRedo?: boolean;
 }
 
-export const WorkspaceStudio: React.FC<WorkspaceStudioProps> = ({ 
-    activeProject, 
-    content, 
-    onChange, 
-    activeFileName, 
-    onUndo, 
-    onRedo, 
-    canUndo, 
+export const WorkspaceStudio: React.FC<WorkspaceStudioProps> = ({
+    activeProject,
+    content,
+    onChange,
+    activeFileName,
+    onUndo,
+    onRedo,
+    canUndo,
     canRedo
 }) => {
     // --- STATE ---
@@ -209,7 +210,7 @@ export const WorkspaceStudio: React.FC<WorkspaceStudioProps> = ({
     const [blocks, setBlocks] = useState<Block[]>([]);
     const [editingBlockId, setEditingBlockId] = useState<string | null>(null);
     const [zoom, setZoom] = useState(100);
-    
+
     // Template State
     const [activeTemplate, setActiveTemplate] = useState<string>('IEEE');
     const [isRefactoring, setIsRefactoring] = useState(false);
@@ -220,29 +221,37 @@ export const WorkspaceStudio: React.FC<WorkspaceStudioProps> = ({
     const [currentPage, setCurrentPage] = useState(1);
     const [totalPages, setTotalPages] = useState(1);
     const viewportRef = useRef<HTMLDivElement>(null);
+
+    const [fontSize, setFontSize] = useState(11); // pt
+    const [lineHeight, setLineHeight] = useState(1.5);
+    const { addToast } = useToastStore();
+
+    // Editor State
+    const [editorRef, setEditorRef] = useState<any>(null);
     const canvasRef = useRef<HTMLDivElement>(null);
 
     // File Upload Ref
     const fileInputRef = useRef<HTMLInputElement>(null);
-    
+
     // --- PAGINATION LOGIC ---
-    const PX_PER_MM = 3.78; 
-    
+    const PX_PER_MM = 3.78;
+
     useEffect(() => {
         const updatePagination = () => {
             if (canvasRef.current && viewportRef.current) {
                 const totalHeight = canvasRef.current.scrollHeight;
-                const pageUnitPx = TOTAL_UNIT_MM * PX_PER_MM; // Height + Gap
-                
+                // Since we use CSS zoom, the scrollHeight matches the visual height (scaled)
+                const pageUnitPx = (TOTAL_UNIT_MM * PX_PER_MM) * (zoom / 100);
+
                 const pages = Math.max(1, Math.ceil(totalHeight / pageUnitPx));
                 setTotalPages(pages);
 
                 const scrollY = viewportRef.current.scrollTop;
                 const scaledPageHeight = pageUnitPx * (zoom / 100);
-                
+
                 // Approximate current page
                 const current = Math.min(pages, Math.max(1, Math.floor((scrollY + (scaledPageHeight / 3)) / scaledPageHeight) + 1));
-                
+
                 setCurrentPage(current);
             }
         };
@@ -252,7 +261,7 @@ export const WorkspaceStudio: React.FC<WorkspaceStudioProps> = ({
             viewport.addEventListener('scroll', updatePagination);
             updatePagination();
             const ro = new ResizeObserver(updatePagination);
-            if(canvasRef.current) ro.observe(canvasRef.current);
+            if (canvasRef.current) ro.observe(canvasRef.current);
 
             return () => {
                 viewport.removeEventListener('scroll', updatePagination);
@@ -266,7 +275,7 @@ export const WorkspaceStudio: React.FC<WorkspaceStudioProps> = ({
         const targetPage = Math.max(1, Math.min(page, totalPages));
         const pageUnitPx = TOTAL_UNIT_MM * PX_PER_MM;
         const scaledPageHeight = pageUnitPx * (zoom / 100);
-        
+
         viewportRef.current.scrollTo({
             top: (targetPage - 1) * scaledPageHeight,
             behavior: 'smooth'
@@ -282,7 +291,7 @@ export const WorkspaceStudio: React.FC<WorkspaceStudioProps> = ({
 
         const newBlocks: Block[] = [];
         const lines = content.split('\n');
-        
+
         let currentType: Block['type'] = 'title';
         let buffer: string[] = [];
         let currentHeading = '';
@@ -294,8 +303,8 @@ export const WorkspaceStudio: React.FC<WorkspaceStudioProps> = ({
                     newBlocks.push({ id: 'meta-title', type: 'title', content: titleText });
                     const authorIdx = buffer.findIndex(l => l.includes('**Authors:**'));
                     if (authorIdx !== -1) {
-                         const authorText = buffer.slice(authorIdx + 1).join('\n').trim();
-                         newBlocks.push({ id: 'meta-authors', type: 'authors', content: authorText });
+                        const authorText = buffer.slice(authorIdx + 1).join('\n').trim();
+                        newBlocks.push({ id: 'meta-authors', type: 'authors', content: authorText });
                     }
                 } else {
                     newBlocks.push({
@@ -320,7 +329,7 @@ export const WorkspaceStudio: React.FC<WorkspaceStudioProps> = ({
                 buffer.push(line);
             }
         });
-        flush('section', 'End'); 
+        flush('section', 'End');
         setBlocks(newBlocks.filter(b => b.content || b.heading));
 
     }, [content]);
@@ -385,8 +394,8 @@ export const WorkspaceStudio: React.FC<WorkspaceStudioProps> = ({
         setTimeout(() => {
             const templateName = file.name.replace(/\.(tex|cls|zip)$/, '');
             setCustomTemplates(prev => [...prev, templateName]);
-            setActiveTemplate('IEEE'); 
-            alert(`Template "${templateName}" uploaded and analyzed. Adapting content...`);
+            setActiveTemplate('IEEE');
+            addToast(`Template "${templateName}" uploaded and analyzed.`, 'success');
             setIsRefactoring(false);
         }, 1500);
     };
@@ -402,24 +411,24 @@ export const WorkspaceStudio: React.FC<WorkspaceStudioProps> = ({
             {/* INJECT STYLES */}
             <style>{BASE_STYLES}</style>
             <style>{TEMPLATES[activeTemplate]?.css || TEMPLATES['IEEE'].css}</style>
-            
+
             {/* TOOLBAR */}
             <div className="h-12 bg-white border-b border-gray-300 flex items-center justify-between px-4 shrink-0 z-30 shadow-sm print:hidden">
                 <div className="flex items-center gap-4">
                     <span className="font-bold text-gray-700 flex items-center gap-2 mr-2">
-                        <Printer className="w-4 h-4 text-indigo-600"/> Live Paper
+                        <Printer className="w-4 h-4 text-indigo-600" /> Live Paper
                     </span>
 
                     {/* VIEW TOGGLE */}
                     <div className="flex bg-gray-100 p-1 rounded-lg border border-gray-200">
-                        <button 
+                        <button
                             onClick={() => setViewMode('visual')}
                             className={`flex items-center gap-2 px-3 py-1.5 rounded-md text-xs font-bold transition-all ${viewMode === 'visual' ? 'bg-white text-indigo-600 shadow-sm' : 'text-gray-500 hover:text-gray-700'}`}
                         >
                             <FileText className="w-3.5 h-3.5" />
                             Visual
                         </button>
-                        <button 
+                        <button
                             onClick={() => setViewMode('source')}
                             className={`flex items-center gap-2 px-3 py-1.5 rounded-md text-xs font-bold transition-all ${viewMode === 'source' ? 'bg-white text-indigo-600 shadow-sm' : 'text-gray-500 hover:text-gray-700'}`}
                         >
@@ -427,13 +436,13 @@ export const WorkspaceStudio: React.FC<WorkspaceStudioProps> = ({
                             Source
                         </button>
                     </div>
-                    
+
                     <div className="h-4 w-px bg-gray-300"></div>
-                    
+
                     {/* TEMPLATE SELECTOR (Visual Mode Only) */}
                     {viewMode === 'visual' && (
                         <div className="relative animate-in fade-in duration-300">
-                            <button 
+                            <button
                                 onClick={() => setTemplateMenuOpen(!templateMenuOpen)}
                                 className="flex items-center gap-2 px-3 py-1.5 bg-gray-100 hover:bg-gray-200 rounded-md text-xs font-semibold text-gray-700 transition-colors"
                             >
@@ -464,40 +473,40 @@ export const WorkspaceStudio: React.FC<WorkspaceStudioProps> = ({
 
                     {viewMode === 'visual' && (
                         <div className="flex items-center gap-1 bg-gray-100 rounded p-0.5 ml-2">
-                            <button onClick={() => setZoom(z => Math.max(50, z - 10))} className="p-1 hover:bg-white rounded"><Minimize className="w-3 h-3"/></button>
+                            <button onClick={() => setZoom(z => Math.max(50, z - 10))} className="p-1 hover:bg-white rounded"><Minimize className="w-3 h-3" /></button>
                             <span className="text-xs w-8 text-center">{zoom}%</span>
-                            <button onClick={() => setZoom(z => Math.min(150, z + 10))} className="p-1 hover:bg-white rounded"><Maximize className="w-3 h-3"/></button>
+                            <button onClick={() => setZoom(z => Math.min(150, z + 10))} className="p-1 hover:bg-white rounded"><Maximize className="w-3 h-3" /></button>
                         </div>
                     )}
                 </div>
                 <div className="flex items-center gap-3">
-                     <div className="flex items-center gap-1 border-r border-gray-200 pr-3 mr-1">
-                         <button 
-                            onClick={onUndo} 
+                    <div className="flex items-center gap-1 border-r border-gray-200 pr-3 mr-1">
+                        <button
+                            onClick={onUndo}
                             disabled={!canUndo}
                             className="p-1.5 text-gray-500 hover:text-gray-800 hover:bg-gray-100 rounded disabled:opacity-30"
                             title="Undo Agent Edit"
-                         >
-                             <Undo2 className="w-4 h-4" />
-                         </button>
-                         <button 
+                        >
+                            <Undo2 className="w-4 h-4" />
+                        </button>
+                        <button
                             onClick={onRedo}
-                            disabled={!canRedo} 
+                            disabled={!canRedo}
                             className="p-1.5 text-gray-500 hover:text-gray-800 hover:bg-gray-100 rounded disabled:opacity-30"
                             title="Redo"
-                         >
-                             <Redo2 className="w-4 h-4" />
-                         </button>
-                     </div>
+                        >
+                            <Redo2 className="w-4 h-4" />
+                        </button>
+                    </div>
 
-                     {viewMode === 'visual' && (
+                    {viewMode === 'visual' && (
                         <button onClick={addNewSection} className="flex items-center gap-1 px-3 py-1.5 bg-indigo-50 text-indigo-700 hover:bg-indigo-100 rounded text-xs font-bold transition-colors">
                             <PlusCircle className="w-3.5 h-3.5" /> Add Section
                         </button>
-                     )}
-                     <button onClick={handlePrint} className="flex items-center gap-1 px-3 py-1.5 bg-gray-800 text-white hover:bg-gray-700 rounded text-xs font-bold transition-colors">
+                    )}
+                    <button onClick={handlePrint} className="flex items-center gap-1 px-3 py-1.5 bg-gray-800 text-white hover:bg-gray-700 rounded text-xs font-bold transition-colors">
                         <Download className="w-3.5 h-3.5" /> Export PDF
-                     </button>
+                    </button>
                 </div>
             </div>
 
@@ -520,14 +529,14 @@ export const WorkspaceStudio: React.FC<WorkspaceStudioProps> = ({
 
                     {/* CANVAS WRAPPER FOR ZOOM */}
                     <div className="flex justify-center min-h-full items-start pb-20">
-                        <div 
+                        <div
                             ref={canvasRef}
                             className={`paper-canvas template-${activeTemplate} print:transform-none print:shadow-none print:m-0`}
-                            style={{ transform: `scale(${zoom / 100})`, transformOrigin: 'top center' }}
+                            style={{ zoom: zoom / 100, transformOrigin: 'top center' }}
                         >
                             {/* Page Numbers Overlay */}
                             {Array.from({ length: totalPages }).map((_, i) => (
-                                <div 
+                                <div
                                     key={i}
                                     className="page-number-overlay"
                                     style={{ top: `${(i + 1) * A4_H_MM + (i * GAP_MM) - 15}mm` }} // Just above the gap
@@ -540,7 +549,7 @@ export const WorkspaceStudio: React.FC<WorkspaceStudioProps> = ({
                             <div className="paper-front-matter">
                                 {/* Title Block */}
                                 {blocks.filter(b => b.type === 'title').map(block => (
-                                    <EditableBlock 
+                                    <EditableBlock
                                         key={block.id}
                                         block={block}
                                         isEditing={editingBlockId === block.id}
@@ -549,10 +558,10 @@ export const WorkspaceStudio: React.FC<WorkspaceStudioProps> = ({
                                         className="paper-title"
                                     />
                                 ))}
-                                
+
                                 {/* Author Block */}
                                 {blocks.filter(b => b.type === 'authors').map(block => (
-                                    <EditableBlock 
+                                    <EditableBlock
                                         key={block.id}
                                         block={block}
                                         isEditing={editingBlockId === block.id}
@@ -566,7 +575,7 @@ export const WorkspaceStudio: React.FC<WorkspaceStudioProps> = ({
                                 {blocks.filter(b => b.type === 'abstract').map(block => (
                                     <div key={block.id} className="paper-abstract">
                                         <span className="paper-abstract-label">Abstract—</span>
-                                        <EditableBlock 
+                                        <EditableBlock
                                             block={block}
                                             isEditing={editingBlockId === block.id}
                                             setEditing={setEditingBlockId}
@@ -584,8 +593,8 @@ export const WorkspaceStudio: React.FC<WorkspaceStudioProps> = ({
                                         {/* Section Header */}
                                         <div className="group flex items-center gap-2 mb-2">
                                             {editingBlockId === block.id ? (
-                                                <input 
-                                                    value={block.heading} 
+                                                <input
+                                                    value={block.heading}
                                                     onChange={(e) => handleHeadingChange(block.id, e.target.value)}
                                                     className="font-bold uppercase text-sm border-b border-indigo-500 outline-none w-full"
                                                     placeholder="SECTION TITLE"
@@ -596,12 +605,12 @@ export const WorkspaceStudio: React.FC<WorkspaceStudioProps> = ({
                                                 </h1>
                                             )}
                                             {editingBlockId === block.id && (
-                                                <button onClick={() => deleteBlock(block.id)} className="text-red-400 hover:text-red-600"><Trash2 className="w-3 h-3"/></button>
+                                                <button onClick={() => deleteBlock(block.id)} className="text-red-400 hover:text-red-600"><Trash2 className="w-3 h-3" /></button>
                                             )}
                                         </div>
 
                                         {/* Content */}
-                                        <EditableBlock 
+                                        <EditableBlock
                                             block={block}
                                             isEditing={editingBlockId === block.id}
                                             setEditing={setEditingBlockId}
@@ -616,7 +625,7 @@ export const WorkspaceStudio: React.FC<WorkspaceStudioProps> = ({
             ) : (
                 /* 2. SOURCE CODE MODE */
                 <div className="flex-1 bg-[#1e1e1e] relative overflow-hidden">
-                    <Editor 
+                    <Editor
                         height="100%"
                         defaultLanguage="markdown"
                         theme="scholar-dark"
@@ -628,7 +637,7 @@ export const WorkspaceStudio: React.FC<WorkspaceStudioProps> = ({
                             fontSize: 14,
                             fontFamily: 'JetBrains Mono, monospace',
                             wordWrap: 'on',
-                            padding: { top: 32, bottom: 32, left: 32, right: 32 },
+                            padding: { top: 32, bottom: 32 },
                             lineNumbers: 'on',
                             folding: true,
                             scrollBeyondLastLine: false,
@@ -643,17 +652,17 @@ export const WorkspaceStudio: React.FC<WorkspaceStudioProps> = ({
             {viewMode === 'visual' && (
                 <div className="absolute bottom-6 left-1/2 transform -translate-x-1/2 z-40 animate-in slide-in-from-bottom-4 print:hidden">
                     <div className="bg-gray-900 text-white rounded-full shadow-2xl px-4 py-2 flex items-center gap-4 text-sm font-medium border border-gray-700/50 backdrop-blur-md">
-                        <button 
+                        <button
                             onClick={() => scrollToPage(currentPage - 1)}
                             disabled={currentPage <= 1}
                             className="p-1 hover:bg-gray-700 rounded-full disabled:opacity-30 transition-colors"
                         >
                             <ChevronLeft className="w-4 h-4" />
                         </button>
-                        
+
                         <div className="flex items-center gap-2 min-w-[100px] justify-center select-none">
                             <span className="text-gray-400">Page</span>
-                            <input 
+                            <input
                                 type="number"
                                 min={1}
                                 max={totalPages}
@@ -669,7 +678,7 @@ export const WorkspaceStudio: React.FC<WorkspaceStudioProps> = ({
                             <span className="text-gray-400">of {totalPages}</span>
                         </div>
 
-                        <button 
+                        <button
                             onClick={() => scrollToPage(currentPage + 1)}
                             disabled={currentPage >= totalPages}
                             className="p-1 hover:bg-gray-700 rounded-full disabled:opacity-30 transition-colors"
@@ -688,7 +697,7 @@ let monacoConfigured = false;
 const setupMonaco = (monaco: any) => {
     if (monacoConfigured) return;
     monacoConfigured = true;
-    
+
     // Custom Citation Completion Provider
     monaco.languages.registerCompletionItemProvider('markdown', {
         provideCompletionItems: (model: any, position: any) => {
@@ -699,7 +708,7 @@ const setupMonaco = (monaco: any) => {
                 startColumn: word.startColumn,
                 endColumn: word.endColumn,
             };
-            
+
             return {
                 suggestions: [
                     {
@@ -744,7 +753,7 @@ const setupMonaco = (monaco: any) => {
 };
 
 const EditableBlock = ({ block, isEditing, setEditing, onChange, className = '', inline = false }: any) => {
-    
+
     const handleEditorDidMount = (editor: any, monaco: any) => {
         setupMonaco(monaco);
         editor.focus();
@@ -757,12 +766,12 @@ const EditableBlock = ({ block, isEditing, setEditing, onChange, className = '',
             return content.split('\n').map((line, i) => <div key={i}>{line}</div>);
         }
         return (
-            <Markdown 
+            <Markdown
                 components={{
-                    p: ({node, ...props}) => <p {...props} className="mb-2" />,
-                    strong: ({node, ...props}) => <span {...props} className="font-bold" />,
-                    em: ({node, ...props}) => <span {...props} className="italic" />,
-                    li: ({node, ...props}) => <li {...props} className="ml-4 list-disc" />
+                    p: ({ node, ...props }) => <p {...props} className="mb-2" />,
+                    strong: ({ node, ...props }) => <span {...props} className="font-bold" />,
+                    em: ({ node, ...props }) => <span {...props} className="italic" />,
+                    li: ({ node, ...props }) => <li {...props} className="ml-4 list-disc" />
                 }}
             >
                 {content}
@@ -783,7 +792,7 @@ const EditableBlock = ({ block, isEditing, setEditing, onChange, className = '',
                         </button>
                     </div>
                 </div>
-                <Editor 
+                <Editor
                     height={block.type === 'section' ? "300px" : "100px"}
                     defaultLanguage="markdown"
                     value={block.content}
@@ -815,18 +824,18 @@ const EditableBlock = ({ block, isEditing, setEditing, onChange, className = '',
     }
 
     return (
-        <div 
+        <div
             className={`editable-block group relative ${className} ${inline ? 'inline' : ''}`}
             onClick={() => setEditing(block.id)}
         >
-             {/* Hover Action */}
-             <div className="absolute -left-6 top-0 opacity-0 group-hover:opacity-100 transition-opacity print:hidden">
-                 <div className="p-1 bg-gray-100 rounded shadow-sm cursor-pointer hover:text-indigo-600">
-                     <Edit3 className="w-3 h-3" />
-                 </div>
-             </div>
-             
-             {renderContent(block.content)}
+            {/* Hover Action */}
+            <div className="absolute -left-6 top-0 opacity-0 group-hover:opacity-100 transition-opacity print:hidden">
+                <div className="p-1 bg-gray-100 rounded shadow-sm cursor-pointer hover:text-indigo-600">
+                    <Edit3 className="w-3 h-3" />
+                </div>
+            </div>
+
+            {renderContent(block.content)}
         </div>
     );
 };

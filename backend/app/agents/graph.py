@@ -21,7 +21,7 @@ from app.core.config import settings
 
 async def planner_node(state: ResearchState) -> dict:
     """Generate manuscript outline based on selected papers and assets"""
-    from app.core.gemini_client import gemini_client
+    from app.core.ai_client import ai_client
     
     query = state["query"]
     selected_paper_ids = state["selected_paper_ids"]
@@ -49,7 +49,7 @@ For each section, provide:
 
 Return a structured outline."""
     
-    outline_text = await gemini_client.generate_text(prompt, temperature=0.7)
+    outline_text = await ai_client.generate_text(prompt, temperature=0.7)
     
     return {
         "current_draft": {

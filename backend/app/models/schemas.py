@@ -21,6 +21,15 @@ class AssetType(str, Enum):
     CODE = "code"
 
 
+class ResearchAssetType(str, Enum):
+    """Student research asset types"""
+    EXPERIMENT_DATA = "experiment_data"
+    MY_FIGURE = "my_figure"
+    MY_CODE = "my_code"
+    MY_TABLE = "my_table"
+    METHODOLOGY = "methodology"
+
+
 class AgentIntent(str, Enum):
     """User intent classification"""
     SEARCH = "SEARCH"
@@ -109,6 +118,38 @@ class LabAssetResponse(BaseModel):
         from_attributes = True
 
 
+# ===== RESEARCH ASSET SCHEMAS (NEW) =====
+
+class ResearchAssetCreate(BaseModel):
+    """Request schema for uploading student research asset"""
+    name: str
+    asset_type: ResearchAssetType
+    description: Optional[str] = None
+    methodology_note: Optional[str] = None
+    section_hint: Optional[str] = None  # "methods" | "results" | "discussion"
+
+
+class ResearchAssetResponse(BaseModel):
+    """Response schema for research asset"""
+    id: str
+    project_id: str
+    name: str
+    asset_type: str
+    description: Optional[str]
+    file_path: str
+    methodology_note: Optional[str]
+    section_hint: Optional[str]
+    is_included_in_draft: bool
+    ai_analysis: Optional[str]
+    file_size: Optional[int]
+    mime_type: Optional[str]
+    created_at: datetime
+    updated_at: datetime
+    
+    class Config:
+        from_attributes = True
+
+
 # ===== CHAT/WORKFLOW SCHEMAS =====
 
 class ChatMessage(BaseModel):
@@ -123,6 +164,8 @@ class ChatRequest(BaseModel):
     message: str
     selected_paper_ids: List[str] = []
     lab_asset_ids: List[str] = []
+    research_asset_ids: List[str] = []  # NEW: Student's research data
+    current_section: Optional[str] = None  # NEW: Which section is being drafted
 
 
 class WorkflowStepLog(BaseModel):
