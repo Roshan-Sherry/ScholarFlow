@@ -167,23 +167,27 @@ export default function App() {
         }
     };
 
-    const handleCreateProjectFromDiscovery = async (selectedPapers: Paper[]) => {
+    const handleGeneratePlanFromDiscovery = async (selectedPapers: Paper[]) => {
+        if (!activeProject) return;
+        
         addAgentLog('System', `Generating Research Plan from ${selectedPapers.length} papers...`);
 
         try {
             const paperIds = selectedPapers.map(p => p.id);
-            const newProject = await api.generateProject(paperIds);
-
+            
+            // Generate outline for current project
+            const outline = await api.generateOutline(activeProject.id, paperIds, [], 'IEEE');
+            
             addAgentLog('System', 'Research Plan generated successfully.', 'success');
 
-            // Use React Query to refresh projects list - smooth navigation without reload
-            // Note: queryClient will be added to component scope below
-            if (typeof queryClient !== 'undefined') {
-                queryClient.invalidateQueries({ queryKey: ['projects'] });
-            }
+            // Refresh project to get updated data
+            const updatedProject = await api.fetchProject(activeProject.id);
+            setActiveProject(updatedProject);
             
-            // Navigate to the new project
-            handleOpenProject(newProject.id);
+            // Switch to Studio mode to view the generated plan
+            setAppMode(AppMode.STUDIO);
+            setViewState(ViewState.STUDIO);
+            
         } catch (error) {
             console.error(error);
             addAgentLog('System', `Failed to generate plan: ${error}`, 'error');
@@ -323,15 +327,30 @@ export default function App() {
         setViewState(ViewState.DISCOVERY);
     };
 
-    const handleAddToProject = (paperId: string) => {
+    const handleAddToProject = async (paperId: string) => {
         if (!activeProject) return;
-        if (activeProject.papers.includes(paperId)) return;
+        
+        // Check if paper already in project
+        if (activeProject.papers.some(p => p.id === paperId)) return;
 
-        const updatedProject = { ...activeProject, papers: [...activeProject.papers, paperId] };
-        setActiveProject(updatedProject);
-        // Only add if not already selected
-        if (!selectedContextIds.has(paperId)) {
-            toggleContext(paperId);
+        try {
+            // Fetch paper details and add to library
+            const paper = await api.fetchPaper(paperId);
+            await api.addPaperToLibrary(activeProject.id, paper);
+            
+            // Refresh project to get updated papers
+            const updatedProject = await api.fetchProject(activeProject.id);
+            setActiveProject(updatedProject);
+            
+            // Auto-select for context
+            if (!selectedContextIds.has(paperId)) {
+                toggleContext(paperId);
+            }
+            
+            addAgentLog('System', `Added paper to library: ${paper.title}`, 'success');
+        } catch (error) {
+            console.error('Error adding paper:', error);
+            addAgentLog('System', 'Failed to add paper to library', 'error');
         }
     };
 
@@ -590,9 +609,10 @@ export default function App() {
                     viewState === ViewState.DISCOVERY && (
                         <WorkspaceDiscovery
                             onOpenPaper={handleOpenPaper}
-                            onCreateCollection={handleCreateProjectFromDiscovery}
+                            onGeneratePlan={handleGeneratePlanFromDiscovery}
                             onAddToProject={handleAddToProject}
-                            activeProjectPapers={activeProject?.papers || []}
+                            activeProjectId={activeProject?.id || ''}
+                            activeProjectPapers={activeProject?.papers.map(p => p.id) || []}
                             selectedContextIds={selectedContextIds}
                             setAgentState={setAgentState}
                             agentState={agentState}       // Passed Prop
@@ -610,7 +630,7 @@ export default function App() {
                         <WorkspaceReading
                             paperId={activePaper}
                             onAddToProject={handleAddToProject}
-                            isSaved={activeProject?.papers.includes(activePaper || '')}
+                            isSaved={activeProject?.papers.some(p => p.id === activePaper) || false}
                         />
                     )
                 }

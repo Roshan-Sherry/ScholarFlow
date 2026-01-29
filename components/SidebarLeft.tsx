@@ -243,7 +243,7 @@ export const SidebarLeft: React.FC<SidebarLeftProps> = ({
                                                 >
                                                     {isSelected ? <CheckSquare className="w-4 h-4 text-indigo-600 fill-indigo-50" /> : <Square className="w-4 h-4" />}
                                                 </button>
-                                                <div className="flex-1 cursor-pointer min-w-0" onClick={() => onOpenPaper(paper.id)}>
+                                                <div className="flex-1 cursor-pointer min-w-0" onClick={() => { console.log('Opening paper:', paper.id, paper.title); onOpenPaper(paper.id); }}>
                                                     <div className={`font-medium text-sm leading-tight truncate ${isSelected ? 'text-indigo-900' : 'text-gray-700'}`}>{paper.title}</div>
                                                     <div className="text-xs text-gray-500 mt-1 truncate">
                                                         {Array.isArray(paper.authors) && paper.authors.length > 0 ? paper.authors[0] : 'Unknown Author'} • {paper.year || 'Year N/A'}

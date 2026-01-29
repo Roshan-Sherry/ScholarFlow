@@ -9,7 +9,8 @@ import json
 import asyncio
 import logging
 
-from app.models.database import get_db, Project
+from app.models.database import get_db, Project, LibraryItem
+from app.models.schemas import OutlineRequest, OutlineResponse, OutlineSection
 from app.services.query_analyzer import query_analyzer
 from app.services.paper_search import search_all_sources
 from app.core.ai_client import ai_client
@@ -270,3 +271,77 @@ async def stream_research_search(request: ResearchQuestionRequest):
             "X-Accel-Buffering": "no"
         }
     )
+
+
+@router.post("/outline", response_model=OutlineResponse)
+async def generate_outline(
+    request: OutlineRequest,
+    db: Session = Depends(get_db)
+):
+    """
+    Generate outline/plan for existing project based on selected papers
+    """
+    try:
+        # Verify project exists
+        project = db.query(Project).filter(Project.id == request.project_id).first()
+        if not project:
+            raise HTTPException(status_code=404, detail="Project not found")
+        
+        # Fetch selected papers
+        papers = db.query(LibraryItem).filter(
+            LibraryItem.id.in_(request.paper_ids),
+            LibraryItem.project_id == request.project_id
+        ).all()
+        
+        if not papers:
+            logger.warning(f"No papers found for outline generation in project {request.project_id}")
+            return OutlineResponse(sections=[])
+        
+        # Build context for planner
+        paper_context = "\n".join([f"- {p.title}: {p.abstract[:200]}..." for p in papers])
+        
+        # Run planner agent
+        from app.agents.graph import planner_node
+        
+        mock_state = {
+            "query": f"Generate a comprehensive research outline for these papers:\n{paper_context}",
+            "selected_paper_ids": request.paper_ids,
+            "lab_asset_ids": request.asset_ids
+        }
+        
+        result = await planner_node(mock_state)
+        outline_text = result.get("current_draft", {}).get("outline", "# Research Plan")
+        
+        # Update project with generated outline
+        project.findings = outline_text
+        db.commit()
+        
+        # Parse outline into sections (simple parsing)
+        sections = []
+        lines = outline_text.split('\n')
+        current_section = None
+        
+        for line in lines:
+            if line.startswith('## '):
+                if current_section:
+                    sections.append(current_section)
+                current_section = OutlineSection(
+                    title=line.replace('## ', '').strip(),
+                    description="",
+                    relevant_paper_ids=request.paper_ids,
+                    recommended_asset_types=[]
+                )
+            elif current_section and line.strip():
+                current_section.description += line + "\n"
+        
+        if current_section:
+            sections.append(current_section)
+        
+        logger.info(f"Generated outline with {len(sections)} sections for project {request.project_id}")
+        
+        return OutlineResponse(sections=sections)
+        
+    except Exception as e:
+        logger.error(f"Error generating outline: {e}", exc_info=True)
+        # Return empty outline on error
+        return OutlineResponse(sections=[])

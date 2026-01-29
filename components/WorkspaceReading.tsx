@@ -35,7 +35,9 @@ export const WorkspaceReading: React.FC<WorkspaceReadingProps> = ({ paperId, onA
     const loadPaper = async () => {
       // 1. Fetch Real Paper Metadata
       try {
+        console.log('Loading paper:', paperId);
         const realPaper = await api.fetchPaper(paperId);
+        console.log('Paper loaded:', realPaper.title, 'PDF URL:', realPaper.pdfUrl);
         setPaper(realPaper);
       } catch (e) {
         console.error("Failed to load paper", e);
@@ -205,11 +207,23 @@ export const WorkspaceReading: React.FC<WorkspaceReadingProps> = ({ paperId, onA
           }
           error={
             <div className="w-[600px] h-[800px] bg-white flex flex-col items-center justify-center text-red-400 gap-3 p-12 text-center rounded shadow-lg">
-              <p className="font-bold">Failed to load PDF.</p>
+              <p className="font-bold">Failed to load PDF</p>
               <p className="text-sm text-gray-500">
-                {paper.pdfUrl ? 'Could not load file from server.' : 'No PDF source found.'}
-                <br />
-                {paper.pdfUrl && <span className="text-xs break-all mt-2 block">{paper.pdfUrl}</span>}
+                {!paper.pdfUrl ? (
+                  <>
+                    No PDF URL available for this paper.
+                    <br />
+                    The paper may not have been uploaded yet.
+                  </>
+                ) : (
+                  <>
+                    Could not load PDF from:
+                    <br />
+                    <span className="text-xs break-all mt-2 block font-mono bg-gray-100 p-2 rounded">{paper.pdfUrl}</span>
+                    <br />
+                    <span className="text-xs mt-2 block">Check if the file exists or try uploading the PDF manually.</span>
+                  </>
+                )}
               </p>
             </div>
           }

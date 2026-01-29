@@ -1,6 +1,6 @@
 """Pydantic schemas for API request/response validation"""
 
-from pydantic import BaseModel, Field
+from pydantic import BaseModel, Field, validator
 from typing import Optional, List, Dict, Any
 from datetime import datetime
 from enum import Enum
@@ -92,6 +92,17 @@ class LibraryItemResponse(BaseModel):
     relevance_score: Optional[float]
     created_at: datetime
     
+    
+    @validator("authors", pre=True)
+    def validate_authors(cls, v):
+        if isinstance(v, str):
+            try:
+                import json
+                return json.loads(v)
+            except:
+                return [v] # Fallback
+        return v
+
     class Config:
         from_attributes = True
 

@@ -1,15 +1,15 @@
 import React, { useState, useRef, useEffect } from 'react';
 import { Search, Sparkles, ArrowUp, Check, Plus, Globe, BrainCircuit, Loader2, Layers, FileText, X, Table } from 'lucide-react';
 import Markdown from 'react-markdown';
-import { VIRTUAL_PROJECT_ID } from '../constants';
 import { Paper, ResearchTurn, AgentState, AgentLog } from '../types';
 import { useStreamingChat } from '../hooks/useStreaming';
 import { addPaperToLibrary } from '../lib/api-client';
 
 interface WorkspaceDiscoveryProps {
     onOpenPaper: (id: string) => void;
-    onCreateCollection?: (papers: Paper[]) => void;
+    onGeneratePlan?: (papers: Paper[]) => void;
     onAddToProject: (id: string) => void;
+    activeProjectId: string;
     activeProjectPapers: string[];
     selectedContextIds: Set<string>;
     setAgentState: (state: AgentState) => void;
@@ -25,8 +25,9 @@ interface WorkspaceDiscoveryProps {
 
 export const WorkspaceDiscovery: React.FC<WorkspaceDiscoveryProps> = ({
     onOpenPaper,
-    onCreateCollection,
+    onGeneratePlan,
     onAddToProject,
+    activeProjectId,
     activeProjectPapers,
     selectedContextIds,
     setAgentState,
@@ -110,7 +111,7 @@ export const WorkspaceDiscovery: React.FC<WorkspaceDiscoveryProps> = ({
             let accumulatedAnswer = "";
 
             await streamChat({
-                project_id: VIRTUAL_PROJECT_ID, // Virtual project ID for discovery
+                project_id: activeProjectId, // Use current project for discovery
                 message: userQuery,
                 selected_paper_ids: Array.from(selectedContextIds),
                 lab_asset_ids: []
@@ -138,11 +139,11 @@ export const WorkspaceDiscovery: React.FC<WorkspaceDiscoveryProps> = ({
                 papers.forEach((p: Paper) => updatedMap.set(p.id, p));
                 setKnownPapers(updatedMap);
 
-                // Automatically add papers to virtual library for persistence
-                console.log('Adding papers to library:', papers.length);
+                // Automatically add papers to project library
+                console.log('Adding papers to project library:', papers.length);
                 for (const paper of papers) {
                     try {
-                        await addPaperToLibrary(VIRTUAL_PROJECT_ID, paper);
+                        await addPaperToLibrary(activeProjectId, paper);
                         console.log('Added paper to library:', paper.title);
                     } catch (error) {
                         console.warn('Failed to add paper to library:', paper.title, error);
@@ -170,21 +171,17 @@ export const WorkspaceDiscovery: React.FC<WorkspaceDiscoveryProps> = ({
         });
     };
 
-    // Trigger the "Wise-Base" style generation
+// Generate outline/plan for current project and switch to Studio
     const handleGenerateCollection = async () => {
-        if (!onCreateCollection) return;
+        if (!onGeneratePlan) return;
 
-        // Use backend generation if we have selected papers
+        // Generate plan from selected papers
         if (selectedResultIds.size > 0) {
             const papersToCompile = Array.from(selectedResultIds)
                 .map(id => knownPapers.get(id))
                 .filter((p): p is Paper => !!p);
-
-            // Save papers to library before generating project
-            // This happens in the parent (App.tsx) via generateProject API call
-            // which now properly associates papers with the project
-
-            onCreateCollection(papersToCompile);
+            
+            onGeneratePlan(papersToCompile);
             setSelectedResultIds(new Set());
         }
     };

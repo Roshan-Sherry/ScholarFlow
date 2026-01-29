@@ -348,8 +348,19 @@ export const generateOutline = async (
   assetIds: string[],
   style: string = 'IEEE'
 ): Promise<OutlineSection[]> => {
-  // Mock implementation - replace when backend endpoint is ready
-  return [];
+  try {
+    const { data } = await apiClient.post('/research/outline', {
+      project_id: projectId,
+      paper_ids: paperIds,
+      asset_ids: assetIds,
+      style
+    });
+    
+    return data.sections || [];
+  } catch (error) {
+    console.error('Error generating outline:', error);
+    throw error;
+  }
 };
 
 export const uploadPaper = async (
@@ -398,34 +409,41 @@ export const addPaperToLibrary = async (
 export const fetchPaper = async (id: string): Promise<Paper> => {
    try {
        const { data } = await apiClient.get<any>(`/papers/${id}`);
-       // Construct URL from pdf_path
-       // pdf_path is absolute server path e.g. "uploads/..."
-       // We need "http://host:8000/uploads/filename"
        
-       // Extract filename
-       const filename = data.pdf_path.split('\\').pop().split('/').pop();
-       // BaseURL includes /api/v1, but uploads are at root. Strip suffix.
-       const rootUrl = (apiClient.defaults.baseURL || '').replace(/\/api\/v1\/?$/, '');
-       const pdfUrl = `${rootUrl}/uploads/${filename}`;
+       // Construct PDF URL
+       let pdfUrl = '';
+       
+       if (data.pdf_path) {
+           // Local PDF file
+           const filename = data.pdf_path.split('\\').pop().split('/').pop();
+           const rootUrl = (apiClient.defaults.baseURL || '').replace(/\/api\/v1\/?$/, '');
+           pdfUrl = `${rootUrl}/uploads/${filename}`;
+       } else if (data.url) {
+           // External URL (ArXiv, etc.)
+           pdfUrl = data.url;
+       } else if (data.arxiv_id) {
+           // Construct ArXiv PDF URL
+           pdfUrl = `https://arxiv.org/pdf/${data.arxiv_id}.pdf`;
+       }
        
        return {
             id: data.id,
             title: data.title,
-            authors: data.authors,
+            authors: Array.isArray(data.authors) ? data.authors : [],
             year: data.year,
-            summary: data.abstract,
+            summary: data.abstract || '',
             tags: [],
             pdfUrl: pdfUrl
        };
    } catch (error) {
-       console.warn(`Failed to fetch paper ${id} from API, checking mocks...`);
-       // Fallback for mocks
+       console.warn(`Failed to fetch paper ${id} from API:`, error);
+       // Fallback
        return {
             id: id,
             title: 'Unknown Paper',
             authors: [],
             year: 2024,
-            summary: 'Could not load.',
+            summary: 'Could not load paper details.',
             tags: [],
             pdfUrl: '' 
        };
