@@ -122,3 +122,91 @@ def chunk_pdf(
         })
     
     return chunks_with_metadata
+
+
+def chunk_pdf_with_pages(
+    pdf_path: Path,
+    chunk_size: int = 1000,
+    chunk_overlap: int = 200
+) -> List[Dict[str, any]]:
+    """
+    Extract and chunk PDF into segments WITH PAGE NUMBER TRACKING.
+    
+    This is the enhanced version that enables "click to open PDF at page" 
+    functionality for ScholarMate citations.
+    
+    Args:
+        pdf_path: Path to PDF file
+        chunk_size: Maximum chunk size
+        chunk_overlap: Overlap between chunks
+    
+    Returns:
+        List of chunk dictionaries with text, metadata, AND page_number
+    """
+    if not PDFPLUMBER_AVAILABLE:
+        logger.warning("pdfplumber not available, skipping PDF extraction")
+        return []
+    
+    chunks_with_metadata = []
+    chunk_index = 0
+    
+    try:
+        with pdfplumber.open(pdf_path) as pdf:
+            for page_num, page in enumerate(pdf.pages, start=1):
+                page_text = page.extract_text()
+                
+                if not page_text:
+                    continue
+                
+                # Chunk this page's text
+                page_chunks = chunk_text(page_text, chunk_size, chunk_overlap)
+                
+                for chunk in page_chunks:
+                    chunks_with_metadata.append({
+                        "text": chunk,
+                        "chunk_index": chunk_index,
+                        "page_number": page_num,  # ← KEY: Track page number!
+                        "source_file": pdf_path.name,
+                        "pdf_path": str(pdf_path)
+                    })
+                    chunk_index += 1
+        
+        # Update total_chunks
+        for chunk in chunks_with_metadata:
+            chunk["total_chunks"] = len(chunks_with_metadata)
+        
+        logger.info(f"Created {len(chunks_with_metadata)} page-tracked chunks from {pdf_path.name}")
+        return chunks_with_metadata
+        
+    except Exception as e:
+        logger.error(f"Error chunking PDF with pages {pdf_path}: {e}")
+        return []
+
+
+def extract_text_by_page(pdf_path: Path) -> List[Dict[str, any]]:
+    """
+    Extract text from PDF organized by page.
+    
+    Returns:
+        List of {page_number, text, char_count} for each page
+    """
+    if not PDFPLUMBER_AVAILABLE:
+        return []
+    
+    pages = []
+    try:
+        with pdfplumber.open(pdf_path) as pdf:
+            for page_num, page in enumerate(pdf.pages, start=1):
+                text = page.extract_text() or ""
+                pages.append({
+                    "page_number": page_num,
+                    "text": text,
+                    "char_count": len(text)
+                })
+        
+        logger.info(f"Extracted {len(pages)} pages from {pdf_path.name}")
+        return pages
+        
+    except Exception as e:
+        logger.error(f"Error extracting pages from {pdf_path}: {e}")
+        return []

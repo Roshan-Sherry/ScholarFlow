@@ -24,14 +24,18 @@ async def generate_project(
     from app.agents.graph import planner_node
     from app.models.database import ProjectPhase
     
-    # 1. Fetch Papers
-    # In a real app, we'd fetch title/abstract from DB to pass to the planner
-    # For now, we trust the ID exist or simple mock the context retrieval
+    # 1. Fetch Papers from existing library or prepare for import
+    from app.models.database import LibraryItem
+    
+    papers = db.query(LibraryItem).filter(LibraryItem.id.in_(request.paper_ids)).all()
     
     # 2. Run Planner Node
-    # We construct a mock state for the planner
+    # Construct state with real paper context
+    # We ideally pass paper metadata to the planner
+    paper_context = "\n".join([f"- {p.title}: {p.abstract[:200]}..." for p in papers])
+    
     mock_state = {
-        "query": "Generate a comprehensive literature review outline for these papers.",
+        "query": f"Generate a comprehensive literature review outline for these papers:\n{paper_context}",
         "selected_paper_ids": request.paper_ids,
         "lab_asset_ids": []
     }
@@ -52,6 +56,27 @@ async def generate_project(
     )
     
     db.add(db_project)
+    db.commit()
+    db.refresh(db_project)
+    
+    # 4. Copy papers to new project's library
+    for paper in papers:
+        # Create a copy of the paper associated with the new project
+        new_library_item = LibraryItem(
+            project_id=db_project.id,
+            title=paper.title,
+            authors=paper.authors,
+            year=paper.year,
+            abstract=paper.abstract,
+            pdf_path=paper.pdf_path,
+            arxiv_id=paper.arxiv_id,
+            doi=paper.doi,
+            url=paper.url,
+            is_selected_for_context=True,  # Select for context by default
+            chunk_count=paper.chunk_count
+        )
+        db.add(new_library_item)
+    
     db.commit()
     db.refresh(db_project)
     

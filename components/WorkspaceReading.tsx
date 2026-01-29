@@ -1,5 +1,5 @@
 import React, { useState, useRef, useEffect } from 'react';
-import { MOCK_PAPERS } from '../constants';
+// import { MOCK_PAPERS } from '../constants'; (Removed)
 import { Highlighter, Share, ZoomIn, ZoomOut, Plus, Check, StickyNote, Copy, Loader2, BookOpen } from 'lucide-react';
 import { Document, Page, pdfjs } from 'react-pdf';
 import { useProjectStore } from '../stores/projectStore';
@@ -33,14 +33,7 @@ export const WorkspaceReading: React.FC<WorkspaceReadingProps> = ({ paperId, onA
     if (!paperId) return;
 
     const loadPaper = async () => {
-      // 1. Check Mock Papers First
-      const mock = MOCK_PAPERS.find(p => p.id === paperId);
-      if (mock) {
-        setPaper(mock);
-        return;
-      }
-
-      // 2. Fetch Real Paper Metadata
+      // 1. Fetch Real Paper Metadata
       try {
         const realPaper = await api.fetchPaper(paperId);
         setPaper(realPaper);

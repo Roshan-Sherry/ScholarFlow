@@ -47,6 +47,9 @@ class ResearchState(TypedDict):
     # Workflow logs (for SSE streaming to frontend)
     logs: Annotated[List[Dict], operator.add]
     
+    # RAG Response state
+    papers_to_save: List[Dict]  # Papers cited in response, offered for library saving
+    
     # Error handling
     error: Optional[str]
 
@@ -80,6 +83,7 @@ def create_initial_state(
         "needs_revision": False,
         "intent": None,
         "logs": [],
+        "papers_to_save": [],  # Papers cited in response
         "error": None
     }
 

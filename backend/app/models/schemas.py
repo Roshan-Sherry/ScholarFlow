@@ -59,6 +59,7 @@ class ProjectResponse(BaseModel):
     findings: Optional[str]
     created_at: datetime
     updated_at: datetime
+    library_items: List["LibraryItemResponse"] = Field(default_factory=list)
     
     class Config:
         from_attributes = True
@@ -84,6 +85,7 @@ class LibraryItemResponse(BaseModel):
     authors: List[str]
     year: Optional[int]
     abstract: str
+    url: Optional[str]
     pdf_path: Optional[str]
     chunk_count: int
     is_selected_for_context: bool

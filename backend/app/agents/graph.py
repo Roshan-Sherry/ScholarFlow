@@ -12,7 +12,8 @@ from app.agents.nodes import (
     refine_query_node,
     lab_analyst_node,
     writer_node,
-    reviewer_node
+    reviewer_node,
+    rag_response_node
 )
 from app.core.config import settings
 
@@ -133,6 +134,7 @@ def save_papers_to_context(state: ResearchState) -> dict:
     
     db = next(get_db())
     saved_ids = []
+    new_count = 0
     
     try:
         for paper in ranked_papers:
@@ -150,19 +152,23 @@ def save_papers_to_context(state: ResearchState) -> dict:
                     year=paper.get("year"),
                     abstract=paper.get("abstract", ""),
                     arxiv_id=paper.get("arxiv_id"),
+                    url=paper.get("url") or paper.get("pdf_url"),
                     relevance_score=paper.get("relevance_score"),
                     is_selected_for_context=True
                 )
                 db.add(library_item)
                 db.commit()
                 saved_ids.append(library_item.id)
+                new_count += 1
+            else:
+                saved_ids.append(existing.id)  # Track existing ones too for context
         
         return {
             "selected_paper_ids": state.get("selected_paper_ids", []) + saved_ids,
             "logs": [{
                 "step": "save_context",
                 "source": "System",
-                "message": f"✓ Saved {len(saved_ids)} papers to library",
+                "message": f"✓ Processed {len(saved_ids)} papers ({new_count} new)",
                 "status": "completed"
             }]
         }
@@ -209,6 +215,9 @@ def create_research_graph():
     # Lab Analyst
     graph.add_node("lab_analyst", lab_analyst_node)
     
+    # RAG Response (grounded answers from papers)
+    graph.add_node("rag_response", rag_response_node)
+    
     # Drafting SubGraph nodes
     graph.add_node("planner", planner_node)
     graph.add_node("writer", writer_node)
@@ -250,8 +259,11 @@ def create_research_graph():
     # refine_query -> search (LOOP BACK)
     graph.add_edge("refine_query", "search")
     
-    # save_to_context -> writer (proceed to drafting)
-    graph.add_edge("save_to_context", "writer")
+    # save_to_context -> rag_response (generate grounded answer)
+    graph.add_edge("save_to_context", "rag_response")
+    
+    # rag_response -> END (research queries end with grounded response)
+    graph.add_edge("rag_response", END)
     
     # ===== LAB ANALYST PATH =====
     

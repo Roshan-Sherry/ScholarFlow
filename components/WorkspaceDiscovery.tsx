@@ -1,9 +1,10 @@
 import React, { useState, useRef, useEffect } from 'react';
 import { Search, Sparkles, ArrowUp, Check, Plus, Globe, BrainCircuit, Loader2, Layers, FileText, X, Table } from 'lucide-react';
 import Markdown from 'react-markdown';
-import { MOCK_PAPERS, VIRTUAL_PROJECT_ID } from '../constants';
+import { VIRTUAL_PROJECT_ID } from '../constants';
 import { Paper, ResearchTurn, AgentState, AgentLog } from '../types';
 import { useStreamingChat } from '../hooks/useStreaming';
+import { addPaperToLibrary } from '../lib/api-client';
 
 interface WorkspaceDiscoveryProps {
     onOpenPaper: (id: string) => void;
@@ -57,7 +58,7 @@ export const WorkspaceDiscovery: React.FC<WorkspaceDiscoveryProps> = ({
     useEffect(() => {
         // Re-populate known papers map from turns if component re-mounts
         const map = new Map<string, Paper>();
-        MOCK_PAPERS.forEach(p => map.set(p.id, p)); // Always know mocks
+        // MOCK_PAPERS.forEach(p => map.set(p.id, p)); // Always know mocks (Removed)
         turns.forEach(turn => {
             turn.sources?.forEach(p => map.set(p.id, p));
         });
@@ -114,18 +115,40 @@ export const WorkspaceDiscovery: React.FC<WorkspaceDiscoveryProps> = ({
                 selected_paper_ids: Array.from(selectedContextIds),
                 lab_asset_ids: []
             }, (chunk) => {
+                // Text chunks
                 accumulatedAnswer += chunk;
                 updateTurn(agentTurnId, {
                     status: 'synthesizing',
                     answer: accumulatedAnswer
                 });
             }, (fullText) => {
+                // Complete
                 updateTurn(agentTurnId, {
                     status: 'completed',
                     answer: fullText
                 });
-                // We rely on the global agent logs (managed by the hook/store) for "Router" logs
-                // But we can also sync them to this turn if we want, but simpler to just show the answer.
+            }, async (papers) => {
+                // NEW: Papers found callback - display discovered papers
+                updateTurn(agentTurnId, {
+                    sources: papers
+                });
+
+                // Add to known papers map for selection
+                const updatedMap = new Map(knownPapers);
+                papers.forEach((p: Paper) => updatedMap.set(p.id, p));
+                setKnownPapers(updatedMap);
+
+                // Automatically add papers to virtual library for persistence
+                console.log('Adding papers to library:', papers.length);
+                for (const paper of papers) {
+                    try {
+                        await addPaperToLibrary(VIRTUAL_PROJECT_ID, paper);
+                        console.log('Added paper to library:', paper.title);
+                    } catch (error) {
+                        console.warn('Failed to add paper to library:', paper.title, error);
+                        // Continue with other papers even if one fails
+                    }
+                }
             });
 
         } catch (error) {
@@ -152,27 +175,14 @@ export const WorkspaceDiscovery: React.FC<WorkspaceDiscoveryProps> = ({
         if (!onCreateCollection) return;
 
         // Use backend generation if we have selected papers
-        if (selectedResultIds.size > 0 && onAddToProject) {
-            // We'll let the parent handle the API call or do it here
-            // For better separation, we might want to pass just IDs, 
-            // but the current prop signature is onCreateCollection(papers: Paper[])
-
-            // Let's modify the parent (App.tsx) to handle this better, 
-            // OR strictly for this refactor, we just call the prop 
-            // and let App.tsx call the API.
-
-            // Actually, checking App.tsx:
-            // const handleCreateProjectFromDiscovery = (selectedPapers: Paper[]) => { ... }
-            // It uses handleCreateProject (mock/basic).
-
-            // We should invoke the new API logic here if possible or pass a flag.
-
-            // Simpler: Just pass the papers and let App.tsx decide.
-            // But wait, App.tsx needs to know to call /generate instead of /create.
-
+        if (selectedResultIds.size > 0) {
             const papersToCompile = Array.from(selectedResultIds)
                 .map(id => knownPapers.get(id))
                 .filter((p): p is Paper => !!p);
+
+            // Save papers to library before generating project
+            // This happens in the parent (App.tsx) via generateProject API call
+            // which now properly associates papers with the project
 
             onCreateCollection(papersToCompile);
             setSelectedResultIds(new Set());
@@ -360,7 +370,47 @@ export const WorkspaceDiscovery: React.FC<WorkspaceDiscoveryProps> = ({
                                                     </h3>
                                                 )}
                                                 <div className="prose prose-sm max-w-none text-gray-800 leading-relaxed">
-                                                    <Markdown>{turn.answer}</Markdown>
+                                                    <Markdown components={{
+                                                        p: ({ children }) => {
+                                                            // Custom renderer to detect [n] patterns
+                                                            return (
+                                                                <p className="mb-4 last:mb-0">
+                                                                    {React.Children.map(children, child => {
+                                                                        if (typeof child === 'string') {
+                                                                            // Regex to find [n] patterns
+                                                                            const parts = child.split(/(\[\d+\])/g);
+                                                                            return parts.map((part, index) => {
+                                                                                const match = part.match(/^\[(\d+)\]$/);
+                                                                                if (match) {
+                                                                                    const citationIndex = parseInt(match[1]);
+                                                                                    // Find the paper corresponding to this index (1-based)
+                                                                                    // The 'sources' array in the turn typically maps 1:1 if we assume order
+                                                                                    const paper = turn.sources && turn.sources[citationIndex - 1];
+
+                                                                                    if (paper) {
+                                                                                        return (
+                                                                                            <span
+                                                                                                key={index}
+                                                                                                className="inline-flex items-center justify-center min-w-[20px] h-5 px-1 ml-1 text-[10px] font-bold text-indigo-600 bg-indigo-100 rounded cursor-pointer hover:bg-indigo-200 transition-colors align-text-top"
+                                                                                                onClick={() => onOpenPaper(paper.id)}
+                                                                                                title={`View: ${paper.title}`}
+                                                                                            >
+                                                                                                {citationIndex}
+                                                                                            </span>
+                                                                                        );
+                                                                                    }
+                                                                                }
+                                                                                return part;
+                                                                            });
+                                                                        }
+                                                                        return child;
+                                                                    })}
+                                                                </p>
+                                                            );
+                                                        }
+                                                    }}>
+                                                        {turn.answer}
+                                                    </Markdown>
                                                 </div>
                                             </div>
                                         )}

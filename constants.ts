@@ -2,7 +2,8 @@
 import { Paper, ProjectFile } from './types';
 
 // Virtual Project ID for Discovery Mode (when no project is open)
-export const VIRTUAL_PROJECT_ID = "00000000-0000-0000-0000-000000000000";
+// This matches the backend constant and allows papers to be saved to a shared library
+export const VIRTUAL_PROJECT_ID = "discovery-virtual-library";
 
 // Using a stable sample PDF that allows CORS
 const SAMPLE_PDF = "https://raw.githubusercontent.com/mozilla/pdf.js/ba2edeae/web/compressed.tracemonkey-pldi-09.pdf";

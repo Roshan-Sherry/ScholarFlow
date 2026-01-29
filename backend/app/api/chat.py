@@ -67,6 +67,33 @@ async def stream_workflow(
                     elif state_update.get("found_papers") and not final_papers:
                         final_papers = state_update["found_papers"]
                         logger.info(f"Captured {len(final_papers)} found papers")
+                    
+                    # NEW: Send 'found' event with papers for frontend display
+                    if state_update.get("found_papers") or state_update.get("ranked_papers"):
+                        papers_to_send = state_update.get("ranked_papers") or state_update.get("found_papers") or []
+                        if papers_to_send:
+                            # Format papers for frontend
+                            formatted_papers = []
+                            for paper in papers_to_send[:20]:  # Limit to 20 for UI
+                                formatted_papers.append({
+                                    "id": paper.get("id") or f"paper-{hash(paper.get('title', ''))}",
+                                    "title": paper.get("title", ""),
+                                    "authors": paper.get("authors", []),
+                                    "year": paper.get("year"),
+                                    "summary": paper.get("abstract") or paper.get("summary", ""),
+                                    "pdfUrl": paper.get("pdf_url") or paper.get("url"),
+                                    "tags": [],
+                                    "source": paper.get("source", "unknown")
+                                })
+                            
+                            # Emit found event
+                            found_event = {
+                                "type": "found",
+                                "count": len(formatted_papers),
+                                "papers": formatted_papers
+                            }
+                            yield f"data: {json.dumps(found_event)}\n\n"
+                            logger.info(f"Sent 'found' event with {len(formatted_papers)} papers")
 
                     # Stream each log entry
                     for log in logs:

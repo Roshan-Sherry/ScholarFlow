@@ -10,6 +10,7 @@ from app.core.ai_client import ai_client
 from app.core.config import settings
 from app.models.database import LibraryItem, LabAsset, get_db
 from app.services.vector_store import vector_store
+from app.services.rag_grounding import generate_grounded_response, format_paper_context
 
 
 # ===== ROUTER NODE =====
@@ -447,3 +448,179 @@ Respond with EITHER:
             }
         ]
     }
+
+
+# ===== RAG RESPONSE NODE (Grounded Answer Generation) =====
+
+async def rag_response_node(state: ResearchState) -> Dict:
+    """
+    Generate a response grounded in the found papers.
+    
+    CONTEXT SHELF PRIORITY:
+    1. First check user's library (selected_paper_ids) - the "Context Shelf"
+    2. Only use ArXiv/Scholar results if library has no relevant content
+    """
+    query = state["query"]
+    project_id = state["project_id"]
+    selected_paper_ids = state.get("selected_paper_ids", [])
+    ranked_papers = state.get("ranked_papers", [])
+    found_papers = state.get("found_papers", [])
+    
+    logs = []
+    library_context = None
+    library_papers_info = []
+    
+    # ===== STEP 1: CHECK CONTEXT SHELF FIRST =====
+    if selected_paper_ids:
+        log_entry = {
+            "step": "rag_response",
+            "source": "ContextShelf",
+            "message": f"📚 Scanning your library ({len(selected_paper_ids)} papers)...",
+            "status": "processing"
+        }
+        logs.append(log_entry)
+        
+        # Search user's library for relevant chunks
+        try:
+            context_chunks = await vector_store.search_similar(
+                project_id=project_id,
+                query=query,
+                paper_ids=selected_paper_ids,
+                top_k=5
+            )
+            
+            if context_chunks and len(context_chunks) > 0:
+                # Found relevant content in library!
+                library_context = context_chunks
+                
+                # Get paper metadata for citations
+                from app.models.database import LibraryItem
+                db = next(get_db())
+                try:
+                    papers = db.query(LibraryItem).filter(
+                        LibraryItem.id.in_(selected_paper_ids)
+                    ).all()
+                    
+                    for paper in papers:
+                        library_papers_info.append({
+                            "title": paper.title,
+                            "authors": paper.authors if isinstance(paper.authors, str) else ", ".join(paper.authors[:3]) if paper.authors else "Unknown",
+                            "year": paper.year,
+                            "abstract": paper.abstract or "",
+                            "source": "User Library",
+                            "pdf_path": paper.pdf_path
+                        })
+                finally:
+                    db.close()
+                
+                logs.append({
+                    "step": "rag_response",
+                    "source": "ContextShelf",
+                    "message": f"✓ Found {len(context_chunks)} relevant passages in your library",
+                    "status": "completed"
+                })
+        except Exception as e:
+            logs.append({
+                "step": "rag_response",
+                "source": "ContextShelf",
+                "message": f"⚠ Library search warning: {str(e)[:50]}",
+                "status": "warning"
+            })
+    
+    # ===== STEP 2: DECIDE DATA SOURCE =====
+    if library_context and library_papers_info:
+        # Use library content (Context Shelf)
+        papers_to_use = library_papers_info
+        source_type = "library"
+        logs.append({
+            "step": "rag_response",
+            "source": "ResearchAssistant",
+            "message": "📖 Answering from YOUR library papers (no external search needed)",
+            "status": "processing"
+        })
+    else:
+        # Fallback to ArXiv/Scholar results
+        papers_to_use = ranked_papers if ranked_papers else found_papers
+        source_type = "external"
+        
+        if papers_to_use:
+            logs.append({
+                "step": "rag_response",
+                "source": "ResearchAssistant",
+                "message": f"🔍 Using {len(papers_to_use)} papers from ArXiv/Scholar",
+                "status": "processing"
+            })
+    
+    # ===== STEP 3: CHECK IF WE HAVE ANY PAPERS =====
+    if not papers_to_use:
+        # No papers found - be honest about it
+        return {
+            "current_draft": {
+                "section": "Response",
+                "content": """I couldn't find any relevant papers for your query. 
+
+**What you can do:**
+1. **Upload papers** to your library for me to analyze
+2. Try rephrasing your question with different keywords
+3. Search for specific topics (e.g., "transformer attention mechanism" instead of "how transformers work")
+
+Would you like me to try a different search?""",
+                "status": "no_papers"
+            },
+            "logs": logs + [{
+                "step": "rag_response",
+                "source": "ResearchAssistant",
+                "message": "⚠ No papers found to ground response",
+                "status": "warning"
+            }]
+        }
+    
+    # Generate grounded response using the found papers
+    try:
+        result = await generate_grounded_response(
+            query=query,
+            papers=papers_to_use,
+            ai_client=ai_client,
+            prompt_type="research"
+        )
+        
+        response_content = result["response"]
+        papers_used = result["papers_used"]
+        
+        # Add source indicator to response
+        source_indicator = "📚 *Answered from your library*" if source_type == "library" else "🔍 *Answered from ArXiv/Scholar*"
+        response_with_source = f"{source_indicator}\n\n{response_content}"
+        
+        return {
+            "current_draft": {
+                "section": "Research Response",
+                "content": response_with_source,
+                "status": "grounded",
+                "source_type": source_type,
+                "papers_used": papers_used,
+                "total_papers": len(papers_to_use)
+            },
+            "papers_to_save": papers_used if source_type == "external" else [],  # Only offer to save external papers
+            "logs": logs + [{
+                "step": "rag_response",
+                "source": "ResearchAssistant",
+                "message": f"✓ Generated response grounded in {len(papers_used)} papers ({source_type})",
+                "status": "completed",
+                "metadata": {
+                    "papers_cited": len(papers_used),
+                    "total_papers_found": result["total_papers_found"],
+                    "source_type": source_type
+                }
+            }]
+        }
+        
+    except Exception as e:
+        return {
+            "error": str(e),
+            "logs": logs + [{
+                "step": "rag_response",
+                "source": "ResearchAssistant",
+                "message": f"✗ Response generation failed: {str(e)}",
+                "status": "error"
+            }]
+        }

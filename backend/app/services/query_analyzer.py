@@ -15,15 +15,11 @@ class QueryAnalyzer:
     """Analyzes user queries and generates optimized search strategies"""
     
     def __init__(self):
-        """Initialize the query analyzer with Gemini Flash"""
-        self.llm = ChatGoogleGenerativeAI(
-            model="gemini-2.0-flash-exp",
-            # temperature=0,  # Removed to fix unexpected keyword argument error
-            google_api_key=settings.google_api_key
-        )
+        """Initialize utilizing the global AI Client"""
+        from app.core.ai_client import ai_client
+        self.ai_client = ai_client
         
-        self.prompt = ChatPromptTemplate.from_template(
-            """You are an expert academic research assistant. Your task is to analyze a user's query, potentially with conversation history, and generate a structured plan for searching academic databases.
+        self.ANALYSIS_PROMPT = """You are an expert academic research assistant. Your task is to analyze a user's query and generate a structured plan for searching academic databases.
 
 **Instructions:**
 1. **Analyze Context:** Read the provided history and the new user query to understand the user's true intent.
@@ -34,37 +30,26 @@ class QueryAnalyzer:
 
 ---
 **Example:**
-User Input:
-"Previous Conversation:
-User: What are RAG systems?
-Assistant: RAG stands for Retrieval-Augmented Generation...
-
-New User Query: ok how do they handle hallucinations?"
+User Input: "how do RAG systems handle hallucinations?"
 
 JSON Output:
-```json
 {{
-    "thought": "The user is asking a follow-up question about how RAG systems mitigate hallucinations. I will create a primary query focused on this mechanism and an expanded query that is broader.",
-    "search_query": "Retrieval-Augmented Generation techniques for hallucination reduction",
+    "thought": "The user is asking about mitigation strategies for hallucinations in Retrieval-Augmented Generation. I will create a primary query focused on this mechanism.",
+    "search_query": "Retrieval-Augmented Generation hallucination mitigation techniques",
     "expanded_queries": [
-        "fact-checking and grounding in RAG pipelines",
+        "fact-checking in RAG pipelines",
         "improving factual consistency in large language models"
     ]
 }}
-```
 ---
-**User Input:**
-{query}
-
 **Conversation History:**
 {history}
 
+**User Input:**
+{query}
+
 **JSON Output:**
 """
-        )
-        
-        # Create the chain
-        self.chain = self.prompt | self.llm | JsonOutputParser()
     
     async def analyze_query(
         self,
@@ -82,46 +67,58 @@ JSON Output:
             Dict with 'thought', 'search_query', and 'expanded_queries'
         """
         try:
-            if settings.mock_ai_responses:
-                # MOCK IMPLEMENTATION - Bypass real API
-                logger.info(f"MOCK MODE: Analyzing query '{query}'")
-                import asyncio
-                await asyncio.sleep(0.5)
-                
-                # Simple keyword extraction for mock
-                keywords = [w for w in query.split() if len(w) > 4]
-                main_topic = keywords[0] if keywords else "general research"
-                
-                return {
-                    "thought": f"The user is asking about {query}. I will search for key papers related to {main_topic} and expand the search to cover recent developments.",
-                    "search_query": f"{query} scientific overview",
-                    "expanded_queries": [
-                        f"{query} recent survey",
-                        f"{query} methodology",
-                        f"{query} challenges and limitations"
-                    ]
-                }
-
+            # Format conversation history
+            history_text = ""
+            if conversation_history:
+                for msg in conversation_history[-5:]:  # Last 5 messages for context
+                    role = msg.get('role', 'user')
+                    content = msg.get('content', '')
+                    history_text += f"{role.title()}: {content}\n"
             else:
-                # REAL IMPLEMENTATION
-                # Format conversation history
-                history_text = ""
-                if conversation_history:
-                    for msg in conversation_history[-5:]:  # Last 5 messages for context
-                        role = msg.get('role', 'user')
-                        content = msg.get('content', '')
-                        history_text += f"{role.title()}: {content}\n"
+                history_text = "No previous conversation."
+            
+            # Generate analysis using AI Client
+            prompt = self.ANALYSIS_PROMPT.format(
+                query=query,
+                history=history_text
+            )
+            
+            # Use Flash model for speed (works with Ollama or Gemini)
+            response_text = await self.ai_client.generate_text(
+                prompt, 
+                temperature=0.1, 
+                use_flash=True
+            )
+            
+            # Parse JSON from response
+            import json
+            import re
+            
+            # Extract JSON block if wrapped in markdown
+            json_match = re.search(r'```json\s*(.*?)\s*```', response_text, re.DOTALL)
+            if json_match:
+                json_str = json_match.group(1)
+            else:
+                # Try to find first { and last }
+                start = response_text.find('{')
+                end = response_text.rfind('}') + 1
+                if start != -1 and end != 0:
+                    json_str = response_text[start:end]
                 else:
-                    history_text = "No previous conversation."
-                
-                # Invoke the chain
-                result = await self.chain.ainvoke({
-                    "query": query,
-                    "history": history_text
-                })
-                
+                    json_str = response_text
+            
+            try:
+                result = json.loads(json_str)
                 logger.info(f"Query analysis: {result.get('search_query', query)}")
                 return result
+            except json.JSONDecodeError:
+                logger.warning(f"Failed to parse query analysis JSON: {response_text[:100]}...")
+                # Fallback to simple structure
+                return {
+                    "thought": "Failed to parse AI analysis",
+                    "search_query": query,
+                    "expanded_queries": []
+                }
             
         except Exception as e:
             logger.error(f"Error analyzing query: {e}")

@@ -25,6 +25,58 @@ UPLOAD_DIR.mkdir(parents=True, exist_ok=True)
 logger.info(f"Upload directory checked: {UPLOAD_DIR}")
 
 
+@router.post("/add-to-library", response_model=LibraryItemResponse)
+async def add_paper_to_library(
+    project_id: str,
+    paper_data: dict,
+    db: Session = Depends(get_db)
+):
+    """
+    Add a discovered paper to project library
+    
+    Args:
+        project_id: Project ID to add paper to
+        paper_data: Paper data from discovery (id, title, authors, year, summary, pdfUrl, source)
+    """
+    try:
+        # Check if paper already exists in this project
+        existing = db.query(LibraryItem).filter(
+            LibraryItem.project_id == project_id,
+            LibraryItem.id == paper_data.get('id')
+        ).first()
+        
+        if existing:
+            logger.info(f"Paper {paper_data.get('id')} already in library")
+            return existing
+        
+        # Create new library item
+        new_paper = LibraryItem(
+            id=paper_data.get('id'),
+            project_id=project_id,
+            title=paper_data.get('title', 'Untitled'),
+            authors=paper_data.get('authors', []),
+            year=paper_data.get('year'),
+            abstract=paper_data.get('summary', ''),
+            arxiv_id=paper_data.get('arxiv_id'),
+            doi=paper_data.get('doi'),
+            url=paper_data.get('pdfUrl'),
+            is_selected_for_context=False,  # Not selected by default
+            chunk_count=0
+        )
+        
+        db.add(new_paper)
+        db.commit()
+        db.refresh(new_paper)
+        
+        logger.info(f"Added paper {new_paper.id} to library for project {project_id}")
+        return new_paper
+        
+    except Exception as e:
+        logger.error(f"Error adding paper to library: {e}", exc_info=True)
+        db.rollback()
+        raise HTTPException(status_code=500, detail=str(e))
+
+
 @router.get("/search", response_model=PaperSearchResponse)
 async def search_papers(
     query: str,
@@ -97,44 +149,51 @@ def process_pdf_background(
     project_id: str,
     db_session_factory
 ):
-    """Refined PDF processing in background"""
+    """
+    Refined PDF processing in background.
+    
+    Uses page-tracked chunking for PDF-to-page linking in citations.
+    """
+    from app.services.pdf_processor import chunk_pdf_with_pages
+    
     db = db_session_factory()
     try:
-        # 1. Extract Text
-        doc = fitz.open(file_path)
-        full_text = ""
-        chunks = []
+        # 1. Extract Text with PAGE TRACKING
+        chunks_with_pages = chunk_pdf_with_pages(file_path)
         
-        # Simple chunking strategy (per page or fixed size)
-        # For better RAG, we'd want overlapping windows, but per-page is a good start
-        for page_num, page in enumerate(doc):
-            text = page.get_text()
-            full_text += text
+        if not chunks_with_pages:
+            # Fallback to PyMuPDF if pdfplumber fails
+            import fitz
+            doc = fitz.open(file_path)
+            chunks_with_pages = []
             
-            # Create chunks (approx 1000 chars)
-            # This is naive; assumes text extraction is clean
-            page_chunks = [text[i:i+1000] for i in range(0, len(text), 1000)]
-            if not page_chunks:
-                page_chunks = ["NO TEXT FOUND ON PAGE"]
-                
-            chunks.extend(page_chunks)
+            for page_num, page in enumerate(doc, start=1):
+                text = page.get_text()
+                if text.strip():
+                    # Create chunks with page tracking
+                    page_chunks = [text[i:i+1000] for i in range(0, len(text), 1000)]
+                    for chunk in page_chunks:
+                        chunks_with_pages.append({
+                            "text": chunk,
+                            "page_number": page_num,
+                            "source_file": file_path.name
+                        })
+            doc.close()
             
-        doc.close()
-        
         # 2. Update Database Record
         paper = db.query(LibraryItem).filter(LibraryItem.id == paper_id).first()
         if paper:
-            paper.chunk_count = len(chunks)
-            # paper.abstract = full_text[:500] + "..." # Optional: Auto-generate abstract
+            paper.chunk_count = len(chunks_with_pages)
             db.commit()
             
-        # 3. Vector Indexing
-        if chunks:
-            vector_store.add_document_chunks(
+        # 3. Vector Indexing WITH PAGE NUMBERS
+        if chunks_with_pages:
+            vector_store.add_document_chunks_with_pages(
                 project_id=project_id,
                 paper_id=paper_id,
-                chunks=chunks
+                chunks_with_pages=chunks_with_pages
             )
+            logger.info(f"Indexed {len(chunks_with_pages)} page-tracked chunks for {paper_id}")
             
     except Exception as e:
         logger.error(f"Error processing PDF {paper_id}: {e}", exc_info=True)

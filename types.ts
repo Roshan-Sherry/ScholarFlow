@@ -81,7 +81,7 @@ export interface Project {
   description: string;
   type: ProjectType;
   lastModified: Date;
-  papers: string[]; // IDs of saved papers
+  papers: Paper[]; // Valid Paper Objects
   files: ProjectFile[]; // Overleaf-like file system
   assets: ProjectAsset[];
   wordCount: number;

@@ -93,6 +93,7 @@ class LibraryItem(Base):
     # External IDs
     arxiv_id = Column(String(100), nullable=True)
     doi = Column(String(200), nullable=True)
+    url = Column(String(500), nullable=True)  # External URL fallback
     
     created_at = Column(DateTime, default=datetime.utcnow)
     

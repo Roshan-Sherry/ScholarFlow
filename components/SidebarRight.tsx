@@ -2,7 +2,7 @@ import React, { useRef, useEffect, useState } from 'react';
 import { AppMode, AgentState, AgentLog, Project, ProjectAsset, OutlineSection, ViewState } from '../types';
 import { Activity, X, PanelLeftClose, PanelRightClose, Terminal, Cpu, Zap, Send, Loader2, FileImage, Table, Wand2, Database, Check, RefreshCw, ChevronDown, ChevronRight, MessageSquare, Sparkles, Eraser, PlayCircle, PenTool, BookOpen, Library, Quote } from 'lucide-react';
 import { AgentAvatar } from './AgentAvatar';
-import { MOCK_PAPERS } from '../constants';
+// import { MOCK_PAPERS } from '../constants'; (Removed)
 import Markdown from 'react-markdown';
 import { useStreamingChat, useStreamingDraft } from '../hooks/useStreaming';
 
@@ -87,7 +87,7 @@ export const SidebarRight: React.FC<SidebarRightProps> = ({
     const [rewriteSuggestion, setRewriteSuggestion] = useState<string | null>(null);
     const [rewriteInstruction, setRewriteInstruction] = useState('');
 
-    const projectPapers = MOCK_PAPERS.filter(p => activeProject?.papers.includes(p.id));
+    const projectPapers = activeProject?.papers || [];
 
     // --- PDF CHAT STATE ---
     const [pdfChatInput, setPdfChatInput] = useState('');
@@ -97,18 +97,20 @@ export const SidebarRight: React.FC<SidebarRightProps> = ({
     // Initialize PDF Chat when entering reading mode
     useEffect(() => {
         if (!isStudio && isReading && activePaper) {
-            const paper = MOCK_PAPERS.find(p => p.id === activePaper);
+            // Find paper in active project or known papers (if we had a global store), for now rely on project
+            const paper = activeProject?.papers.find(p => p.id === activePaper) || { title: 'this paper' };
+
             // Only add initial message if empty
             setPdfChatMessages(prev => {
                 if (prev.length === 0) {
-                    return [{ role: 'agent', text: `I'm ready to discuss "**${paper?.title || 'this paper'}**". Ask me about its methodology, results, or conclusions.` }];
+                    return [{ role: 'agent', text: `I'm ready to discuss "**${paper?.title}**". Ask me about its methodology, results, or conclusions.` }];
                 }
                 return prev;
             });
         } else if (!isReading) {
             setPdfChatMessages([]); // Reset when leaving reading mode
         }
-    }, [isStudio, isReading, activePaper]);
+    }, [isStudio, isReading, activePaper, activeProject]);
 
     useEffect(() => {
         pdfChatEndRef.current?.scrollIntoView({ behavior: 'smooth' });
@@ -191,7 +193,7 @@ export const SidebarRight: React.FC<SidebarRightProps> = ({
                 // Use selected papers from Library tab, or all project papers if none selected
                 const paperIds = selectedContextIds.size > 0
                     ? Array.from(selectedContextIds)
-                    : activeProject.papers || [];
+                    : (activeProject.papers || []).map(p => p.id);
 
                 // Use selected assets if any
                 const assetIds = draftingAssetIds.size > 0

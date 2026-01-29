@@ -5,7 +5,7 @@ import concurrent.futures
 import logging
 
 from app.services.arxiv_client import arxiv_client
-from app.services.semantic_scholar_client import semantic_scholar_client
+# from app.services.semantic_scholar_client import semantic_scholar_client (Removed)
 from app.core.config import settings
 
 logger = logging.getLogger(__name__)
@@ -26,21 +26,58 @@ def search_arxiv_wrapper(query: str, max_results: int) -> List[Dict]:
         return []
 
 
-def search_scholar_wrapper(query: str, max_results: int) -> List[Dict]:
-    """Wrapper for Semantic Scholar search with error handling"""
+def search_scholarly_wrapper(query: str, max_results: int) -> List[Dict]:
+    """Wrapper for Google Scholar search using scholarly"""
     try:
-        results = semantic_scholar_client.search(query, limit=max_results)
-        # Normalize fields to match expected format
-        for paper in results:
-            paper['source'] = 'semantic_scholar'
-            paper['summary'] = paper.get('abstract', '')
-            paper['url'] = paper.get('url', '')
-            # Use paper_id as fallback for arxiv_id if not present
-            if not paper.get('arxiv_id'):
-                paper['arxiv_id'] = paper.get('paper_id')
+        from scholarly import scholarly
+        
+        search_query = scholarly.search_pubs(query)
+        results = []
+        
+        for _ in range(max_results):
+            try:
+                item = next(search_query)
+                bib = item.get('bib', {})
+                
+                # Robust Author Parsing
+                authors = bib.get('author', [])
+                if isinstance(authors, str):
+                    # Handle "Author A and Author B" or "Author A, Author B"
+                    if ' and ' in authors:
+                        authors = authors.split(' and ')
+                    elif ', ' in authors:
+                        authors = authors.split(', ')
+                    else:
+                        authors = [authors]
+                
+                # Extract URL securely
+                pub_url = item.get('pub_url', '')
+                if not pub_url and 'eprint_url' in item:
+                    pub_url = item['eprint_url']
+                
+                # Scholarly sometimes gives direct PDF link in eprint
+                pdf_url = item.get('eprint_url', '')
+                if not pdf_url and pub_url.endswith('.pdf'):
+                    pdf_url = pub_url
+
+                paper = {
+                    'title': bib.get('title', 'Unknown Title'),
+                    'authors': authors, # Now guaranteed list
+                    'year': bib.get('pub_year'),
+                    'abstract': bib.get('abstract', 'No abstract available.'),
+                    'url': pub_url,
+                    'pdf_url': pdf_url, 
+                    'source': 'google_scholar',
+                    'arxiv_id': None,  
+                    'citation_count': item.get('num_citations', 0)
+                }
+                results.append(paper)
+            except StopIteration:
+                break
+                
         return results
     except Exception as e:
-        logger.error(f"Semantic Scholar search failed: {e}")
+        logger.error(f"Google Scholar search failed: {e}")
         return []
 
 
@@ -71,7 +108,7 @@ def search_all_sources(
         with concurrent.futures.ThreadPoolExecutor(max_workers=2) as executor:
             # Submit both searches concurrently
             arxiv_future = executor.submit(search_arxiv_wrapper, query, max_results_per_source)
-            scholar_future = executor.submit(search_scholar_wrapper, query, max_results_per_source)
+            scholar_future = executor.submit(search_scholarly_wrapper, query, max_results_per_source)
             
             # Gather results
             arxiv_papers = arxiv_future.result(timeout=10)

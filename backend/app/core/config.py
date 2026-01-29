@@ -17,13 +17,23 @@ class Settings(BaseSettings):
     mock_ai_responses: bool = False
 
     # AI / LLM Configuration
-    llm_provider: str = "gemini"  # "gemini", "ollama", "openai"
-    text_model_name: str = "gemini-2.5-flash" # Using Flash to stay within free tier limits
-    fast_model_name: str = "gemini-2.5-flash" # or "llama3:instruct", "gpt-3.5-turbo"
-    vision_model_name: str = "gemini-2.5-flash" # Using Flash for vision too
+    llm_provider: str = "hybrid"  # "gemini", "ollama", "hybrid"
     
-    # Optional Custom Base URL (for Ollama/vLLM)
-    llm_base_url: str | None = None
+    # Gemini Config (Fallback & Vision)
+    text_model_name: str = "gemini-1.5-flash"
+    fast_model_name: str = "gemini-1.5-flash"
+    vision_model_name: str = "gemini-1.5-pro"
+    
+    # Ollama Config (Primary for hybrid mode)
+    ollama_base_url: str = "http://localhost:11434"
+    ollama_model_fast: str = "scholarmate"  # Use custom model for EVERYTHING
+    ollama_model_smart: str = "scholarmate"  # Use custom model for EVERYTHING
+    
+    # Hybrid Mode Settings
+    use_ollama_for_chat: bool = True     # Chat -> Ollama
+    use_ollama_for_writing: bool = True  # Writing -> Ollama
+    use_ollama_for_ranking: bool = True  # Ranking -> Ollama (was False)
+    use_gemini_for_vision: bool = True   # Vision -> Gemini (Keep True)
     
     # Application
     app_env: str = "development"

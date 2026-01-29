@@ -71,8 +71,9 @@ class VectorStoreService:
         project_id: str,
         query: str,
         paper_ids: Optional[List[str]] = None,
-        top_k: int = 5
-    ) -> List[str]:
+        top_k: int = 5,
+        include_metadata: bool = False
+    ) -> List:
         """Search for similar chunks in project's vector store
         
         Args:
@@ -80,9 +81,10 @@ class VectorStoreService:
             query: Search query
             paper_ids: Optional filter to specific papers
             top_k: Number of results to return
+            include_metadata: If True, returns dicts with chunk text and metadata (page_number, etc.)
             
         Returns:
-            List of relevant text chunks
+            List of text chunks (or dicts with metadata if include_metadata=True)
         """
         
         index_path = self._get_index_path(project_id)
@@ -105,7 +107,7 @@ class VectorStoreService:
         
         # Filter by paper IDs if provided
         results = []
-        for idx in indices[0]:
+        for i, idx in enumerate(indices[0]):
             if idx < len(metadata):
                 chunk_meta = metadata[idx].item()
                 
@@ -113,7 +115,16 @@ class VectorStoreService:
                 if paper_ids and chunk_meta["paper_id"] not in paper_ids:
                     continue
                 
-                results.append(chunk_meta["chunk"])
+                if include_metadata:
+                    # Return full metadata including page number
+                    results.append({
+                        "text": chunk_meta["chunk"],
+                        "paper_id": chunk_meta.get("paper_id"),
+                        "page_number": chunk_meta.get("page_number"),
+                        "relevance_score": float(distances[0][i]) if i < len(distances[0]) else 0.0
+                    })
+                else:
+                    results.append(chunk_meta["chunk"])
                 
                 if len(results) >= top_k:
                     break
@@ -126,7 +137,7 @@ class VectorStoreService:
         paper_id: str,
         chunks: List[str]
     ):
-        """Add chunks from a new document to existing index"""
+        """Add chunks from a new document to existing index (no page tracking)"""
         
         index_path = self._get_index_path(project_id)
         metadata_path = self._get_metadata_path(project_id)
@@ -149,6 +160,55 @@ class VectorStoreService:
         # Add metadata
         for chunk in chunks:
             metadata.append({"chunk": chunk, "paper_id": paper_id})
+        
+        # Save updated index
+        faiss.write_index(index, str(index_path))
+        np.save(metadata_path, np.array(metadata))
+    
+    def add_document_chunks_with_pages(
+        self,
+        project_id: str,
+        paper_id: str,
+        chunks_with_pages: List[dict]
+    ):
+        """
+        Add chunks with page number tracking for PDF-to-page linking.
+        
+        Args:
+            project_id: Project ID
+            paper_id: Paper ID
+            chunks_with_pages: List of {text, page_number, ...} dicts from chunk_pdf_with_pages()
+        """
+        
+        index_path = self._get_index_path(project_id)
+        metadata_path = self._get_metadata_path(project_id)
+        
+        # Load existing or create new
+        if index_path.exists():
+            index = faiss.read_index(str(index_path))
+            metadata = list(np.load(metadata_path, allow_pickle=True))
+        else:
+            index = faiss.IndexFlatL2(self.dimension)
+            metadata = []
+        
+        # Extract texts for encoding
+        texts = [c["text"] for c in chunks_with_pages]
+        
+        # Encode new chunks
+        embeddings = self.embedding_model.encode(texts, show_progress_bar=False)
+        embeddings = np.array(embeddings).astype('float32')
+        
+        # Add to index
+        index.add(embeddings)
+        
+        # Add metadata WITH PAGE NUMBERS
+        for chunk in chunks_with_pages:
+            metadata.append({
+                "chunk": chunk["text"],
+                "paper_id": paper_id,
+                "page_number": chunk.get("page_number"),  # ← KEY: Store page number
+                "source_file": chunk.get("source_file")
+            })
         
         # Save updated index
         faiss.write_index(index, str(index_path))

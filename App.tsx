@@ -18,8 +18,11 @@ import { useAgentStore } from './stores/agentStore';
 import { useProjects, useCreateProject } from './hooks/useProjects';
 import { useStreamingChat } from './hooks/useStreaming';
 import * as api from './lib/api-client';
+import { useQueryClient } from '@tanstack/react-query';
 
 export default function App() {
+    // Get React Query client for cache invalidation
+    const queryClient = useQueryClient();
     // --- ZUSTAND STORES ---
     const {
         appMode, viewState, isLeftSidebarCollapsed, isRightSidebarCollapsed,
@@ -173,15 +176,14 @@ export default function App() {
 
             addAgentLog('System', 'Research Plan generated successfully.', 'success');
 
-            // Re-fetch projects to update list (in real app React Query handles this)
-            // handleOpenProject uses local state from 'projects' array which might be stale
-            // We force a refresh or just set active project directly
+            // Use React Query to refresh projects list - smooth navigation without reload
+            // Note: queryClient will be added to component scope below
+            if (typeof queryClient !== 'undefined') {
+                queryClient.invalidateQueries({ queryKey: ['projects'] });
+            }
+            
+            // Navigate to the new project
             handleOpenProject(newProject.id);
-
-            // Quick hack to force refresh of projects list query if using React Query
-            // queryClient.invalidateQueries(...) // but we don't have queryClient in scope easily here unless we use hook
-
-            window.location.reload(); // Simplest way to ensure everything syncs for this prototype
         } catch (error) {
             console.error(error);
             addAgentLog('System', `Failed to generate plan: ${error}`, 'error');
@@ -364,6 +366,10 @@ export default function App() {
             },
             (fullText) => {
                 setPendingMessage(null);
+                // Refresh project to get new papers/context
+                if (activeProject) {
+                    api.fetchProject(activeProject.id).then(updated => setActiveProject(updated));
+                }
             });
     };
 

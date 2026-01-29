@@ -49,11 +49,53 @@ class AIClient:
             self._init_gemini()
         elif self.provider == "ollama":
             self._init_ollama()
+        elif self.provider == "hybrid":
+            self._init_hybrid()
         elif self.provider == "openai":
             self._init_openai()
         else:
             logger.warning(f"Unknown provider '{self.provider}', falling back to Gemini")
             self._init_gemini()
+    
+    def _init_hybrid(self):
+        """Initialize Hybrid Mode: Ollama for text, Gemini for vision"""
+        logger.info("Initializing Hybrid Mode (Ollama + Gemini)")
+        
+        # Initialize Ollama for text generation
+        if OLLAMA_AVAILABLE:
+            base_url = settings.ollama_base_url
+            
+            self.text_model = ChatOllama(
+                model=settings.ollama_model_smart,  # scholarmate
+                base_url=base_url,
+                temperature=0.3  # Lower for academic precision
+            )
+            self.flash_model = ChatOllama(
+                model=settings.ollama_model_fast,  # llama3.2:1b
+                base_url=base_url,
+                temperature=0.5
+            )
+            logger.info(f"Ollama models initialized: {settings.ollama_model_smart}, {settings.ollama_model_fast}")
+        else:
+            logger.warning("Ollama not available, using Gemini for all tasks")
+            self._init_gemini()
+            return
+        
+        # Initialize Gemini for vision tasks
+        api_key = settings.google_api_key
+        self.vision_model = ChatGoogleGenerativeAI(
+            model=settings.vision_model_name,
+            google_api_key=api_key,
+            convert_system_message_to_human=True
+        )
+        logger.info(f"Gemini vision model initialized: {settings.vision_model_name}")
+        
+        # Store reference to Gemini for fallback
+        self.gemini_fallback = ChatGoogleGenerativeAI(
+            model=settings.fast_model_name,
+            google_api_key=api_key,
+            convert_system_message_to_human=True
+        )
 
     def _init_gemini(self):
         """Initialize Google Gemini Models"""
@@ -248,22 +290,22 @@ The effectiveness of CoT is highly dependent on the quality of the reasoning dem
             q_lower = query.lower()
             if "draft" in q_lower or "write" in q_lower or "outline" in q_lower:
                 return "DRAFT"
-            if "search" in q_lower or "find" in q_lower:
-                return "SEARCH"
-            if "analyze" in q_lower or "summarize" in q_lower:
+            if "analyze" in q_lower and ("image" in q_lower or "figure" in q_lower or "data" in q_lower):
                 return "ANALYZE"
                 
-            return "SEARCH"  # Default to SEARCH for testing research flow
+            return "SEARCH"  # Default to SEARCH for RAG-based research
             
         else:
             # REAL IMPLEMENTATION
             prompt = f"""Classify the following user query into ONE of these categories:
-- SEARCH: User wants to find research papers
-- DRAFT: User wants to write/generate academic text
-- ANALYZE: User wants to analyze data/images
-- CHAT: General question or discussion
+- SEARCH: User is asking a research question or wants to learn about a topic (DEFAULT for knowledge queries)
+- DRAFT: User explicitly wants to write/generate/compose academic text or a manuscript section
+- ANALYZE: User wants to analyze uploaded images, figures, or lab data
 
 Query: "{query}"
+
+IMPORTANT: For any knowledge or research question (e.g., "what is...", "how does...", "explain..."), classify as SEARCH.
+Only use DRAFT if the user explicitly asks to write or draft something.
 
 Return ONLY the category name, nothing else."""
             
@@ -271,13 +313,13 @@ Return ONLY the category name, nothing else."""
             result = await self.generate_text(prompt, temperature=0.1, use_flash=True)
             intent = result.strip().upper()
             
-            if any(cat in intent for cat in ["SEARCH", "DRAFT", "ANALYZE", "CHAT"]):
-                if "SEARCH" in intent: return "SEARCH"
+            if any(cat in intent for cat in ["SEARCH", "DRAFT", "ANALYZE"]):
                 if "DRAFT" in intent: return "DRAFT"
                 if "ANALYZE" in intent: return "ANALYZE"
-                return "CHAT"
+                if "SEARCH" in intent: return "SEARCH"
                 
-            return "CHAT"
+            # Default to SEARCH for RAG-based research assistant
+            return "SEARCH"
 
     async def score_paper_relevance(
         self,

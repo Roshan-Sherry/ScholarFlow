@@ -66,7 +66,17 @@ export const fetchProject = async (id: string): Promise<Project> => {
     type: data.mode,
     lastModified: new Date(data.updated_at),
     wordCount: 0,
-    papers: [],
+    papers: (data.library_items || []).map((p: any) => ({
+        id: p.id,
+        title: p.title,
+        authors: p.authors || [],
+        year: p.year,
+        summary: p.abstract || '',
+        tags: [],
+        pdfUrl: p.pdf_path 
+            ? `${(apiClient.defaults.baseURL || '').replace(/\/api\/v1\/?$/, '')}/uploads/${p.pdf_path.split(/[/\\]/).pop()}` 
+            : (p.url || (p.arxiv_id ? `https://arxiv.org/pdf/${p.arxiv_id}.pdf` : undefined))
+    })),
     files: [],
     assets: [],
     methodology: data.methodology,
@@ -358,6 +368,31 @@ export const uploadPaper = async (
   );
 
   return data;
+};
+
+export const addPaperToLibrary = async (
+  projectId: string,
+  paper: Paper
+): Promise<any> => {
+  try {
+    const { data } = await apiClient.post(
+      `/papers/add-to-library?project_id=${projectId}`,
+      {
+        id: paper.id,
+        title: paper.title,
+        authors: paper.authors,
+        year: paper.year,
+        summary: paper.summary,
+        pdfUrl: paper.pdfUrl,
+        arxiv_id: paper.id.includes('arxiv') ? paper.id : undefined,
+        doi: paper.id.includes('doi') ? paper.id : undefined
+      }
+    );
+    return data;
+  } catch (error) {
+    console.error('Error adding paper to library:', error);
+    throw error;
+  }
 };
 
 export const fetchPaper = async (id: string): Promise<Paper> => {

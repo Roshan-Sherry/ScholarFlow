@@ -18,7 +18,8 @@ export function useStreamingChat() {
     async (
       payload: ChatStreamPayload,
       onTextChunk?: (text: string) => void,
-      onComplete?: (fullText: string) => void
+      onComplete?: (fullText: string) => void,
+      onPapersFound?: (papers: any[]) => void
     ) => {
       setIsStreaming(true);
       setStoreStreaming(true);
@@ -41,6 +42,10 @@ export function useStreamingChat() {
              addAgentLog('System', event.message || event.type, 'info');
           } else if (event.type === 'found') {
              addAgentLog('System', `Found ${event.count} relevant papers.`, 'success');
+             // NEW: Pass papers to component for display
+             if (onPapersFound && event.papers) {
+               onPapersFound(event.papers);
+             }
           } else if (event.type === 'analyzed') {
              // Optional: log or just ignore, the 'thought' log covers the details
           } else if (event.type === 'text' && event.data) {
