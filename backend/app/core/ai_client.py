@@ -68,14 +68,16 @@ class AIClient:
             self.text_model = ChatOllama(
                 model=settings.ollama_model_smart,  # scholarmate
                 base_url=base_url,
-                temperature=0.3  # Lower for academic precision
+                temperature=0.3,  # Lower for academic precision
+                keep_alive=-1  # Keep model in memory indefinitely
             )
             self.flash_model = ChatOllama(
                 model=settings.ollama_model_fast,  # llama3.2:1b
                 base_url=base_url,
-                temperature=0.5
+                temperature=0.7,  # Higher for faster sampling
+                keep_alive=-1  # Keep model in memory indefinitely
             )
-            logger.info(f"Ollama models initialized: {settings.ollama_model_smart}, {settings.ollama_model_fast}")
+            logger.info(f"Ollama models initialized: {settings.ollama_model_smart} (smart), {settings.ollama_model_fast} (fast)")
         else:
             logger.warning("Ollama not available, using Gemini for all tasks")
             self._init_gemini()
@@ -179,6 +181,10 @@ class AIClient:
         use_flash: bool = False
     ) -> str:
         """Generate text using either mock or real model"""
+        import time
+        
+        start = time.time()
+        
         if settings.mock_ai_responses:
             """Generate text using MOCK responses (no API calls)"""
             import asyncio
@@ -210,6 +216,11 @@ The effectiveness of CoT is highly dependent on the quality of the reasoning dem
                configured = model
     
             response = await configured.ainvoke(prompt)
+            
+            elapsed = time.time() - start
+            model_name = "flash" if use_flash else "smart"
+            logger.info(f"Generation ({model_name} model) took {elapsed:.2f}s")
+            
             return response.content
 
     async def generate_text_stream(
@@ -352,6 +363,31 @@ Return ONLY a decimal number between 0.0 and 1.0."""
                 return max(0.0, min(1.0, score))
             except (ValueError, TypeError):
                 return 0.5
+
+    async def generate_batch(
+        self,
+        prompts: List[str],
+        temperature: float = 0.7,
+        max_tokens: int = 2048,
+        use_flash: bool = False
+    ) -> List[str]:
+        """Generate multiple responses in parallel for faster multi-agent workflows"""
+        import asyncio
+        import time
+        
+        start = time.time()
+        
+        tasks = [
+            self.generate_text(prompt, temperature, max_tokens, use_flash)
+            for prompt in prompts
+        ]
+        
+        results = await asyncio.gather(*tasks)
+        
+        elapsed = time.time() - start
+        logger.info(f"Batch generation ({len(prompts)} prompts) took {elapsed:.2f}s ({elapsed/len(prompts):.2f}s avg)")
+        
+        return results
 
 # Global client instance
 ai_client = AIClient()

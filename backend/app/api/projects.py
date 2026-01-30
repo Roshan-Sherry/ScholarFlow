@@ -141,3 +141,19 @@ async def delete_project(
     db.commit()
     
     return {"message": "Project deleted successfully"}
+
+
+@router.get("/{project_id}/chat", response_model=List[dict])
+async def get_project_chat_history(
+    project_id: str,
+    db: Session = Depends(get_db)
+):
+    """Get chat history for a project"""
+    from app.models.database import ChatSession
+    
+    session = db.query(ChatSession).filter(ChatSession.project_id == project_id).first()
+    
+    if not session or not session.messages:
+        return []
+        
+    return session.messages

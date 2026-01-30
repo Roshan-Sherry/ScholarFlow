@@ -3,7 +3,7 @@ import { Search, Sparkles, ArrowUp, Check, Plus, Globe, BrainCircuit, Loader2, L
 import Markdown from 'react-markdown';
 import { Paper, ResearchTurn, AgentState, AgentLog } from '../types';
 import { useStreamingChat } from '../hooks/useStreaming';
-import { addPaperToLibrary } from '../lib/api-client';
+import { addPaperToLibrary, fetchChatHistory } from '../lib/api-client';
 
 interface WorkspaceDiscoveryProps {
     onOpenPaper: (id: string) => void;
@@ -55,6 +55,78 @@ export const WorkspaceDiscovery: React.FC<WorkspaceDiscoveryProps> = ({
             bottomAnchorRef.current.scrollIntoView({ behavior, block: 'end' });
         }
     };
+
+    // Load Chat History
+    useEffect(() => {
+        const loadHistory = async () => {
+            if (!activeProjectId) return;
+
+            // Don't overwrite if we already have turns (transient state preservation)
+            // But if we switched projects, we MUST reload.
+            // Simplified logic: If activeProjectId changes, fetch.
+            // We need a ref to track previous project ID to know if we should clear/fetch
+        };
+        loadHistory();
+    }, [activeProjectId]);
+
+    // Ref to track usage to prevent loops or bad overwrites, though simple useEffect dependency is handled by Parent typically.
+    // Ideally App.tsx handles this, but we are doing it here as requested.
+
+    useEffect(() => {
+        let isMounted = true;
+
+        async function fetchHistory() {
+            if (!activeProjectId) return;
+
+            // Only fetch if turns are empty OR if we assume this component unmounts/remounts on project switch
+            // Actually, App.tsx keeps it mounted but hidden? No, generic render logic
+            // <WorkspaceDiscovery ... /> is conditionally rendered.
+
+            try {
+                const history = await fetchChatHistory(activeProjectId);
+                if (!isMounted) return;
+
+                if (history && history.length > 0) {
+                    // Map generic history to ResearchTurn
+                    const mappedTurns: ResearchTurn[] = [];
+
+                    // Group pairs if possible, or just linear
+                    // Our generic backend returns separate messages.
+                    // Frontend "ResearchTurn" implies pairs (User query -> Agent answer), BUT
+                    // the interface allows simple list if we treat each as a turn.
+                    // The UI maps them: role='user' displays query, role='agent' displays answer.
+
+                    history.forEach(msg => {
+                        const turn: ResearchTurn = {
+                            id: msg.id || `hist-${Math.random()}`,
+                            role: msg.role as 'user' | 'agent',
+                            status: 'completed',
+                            logs: [],
+                            sources: [], // TODO: Hydrate sources from IDs if available
+                            query: msg.role === 'user' ? msg.content : undefined,
+                            answer: msg.role === 'agent' ? msg.content : undefined
+                        };
+                        mappedTurns.push(turn);
+                    });
+
+                    setTurns(mappedTurns);
+                } else {
+                    // No history, cleared (or new project)
+                    // If we switched projects, we might want to clear existing turns if they belong to diff project.
+                    // Since turns are passed from App.tsx, App.tsx might hold stale state.
+                    // We should clear if history is empty? Or better, `setTurns([])` initially?
+                    setTurns([]);
+                }
+            } catch (e) {
+                console.error("Failed to load chat history", e);
+            }
+        }
+
+        fetchHistory();
+
+        return () => { isMounted = false; };
+    }, [activeProjectId, setTurns]); // Run when project changes
+
 
     useEffect(() => {
         // Re-populate known papers map from turns if component re-mounts
@@ -171,7 +243,7 @@ export const WorkspaceDiscovery: React.FC<WorkspaceDiscoveryProps> = ({
         });
     };
 
-// Generate outline/plan for current project and switch to Studio
+    // Generate outline/plan for current project and switch to Studio
     const handleGenerateCollection = async () => {
         if (!onGeneratePlan) return;
 
@@ -180,7 +252,7 @@ export const WorkspaceDiscovery: React.FC<WorkspaceDiscoveryProps> = ({
             const papersToCompile = Array.from(selectedResultIds)
                 .map(id => knownPapers.get(id))
                 .filter((p): p is Paper => !!p);
-            
+
             onGeneratePlan(papersToCompile);
             setSelectedResultIds(new Set());
         }

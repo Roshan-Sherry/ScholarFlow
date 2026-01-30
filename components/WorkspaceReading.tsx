@@ -17,17 +17,27 @@ interface WorkspaceReadingProps {
   paperId: string | null;
   onAddToProject?: (id: string) => void;
   isSaved?: boolean;
+  initialPage?: number;
+  highlightText?: string;
 }
 
-export const WorkspaceReading: React.FC<WorkspaceReadingProps> = ({ paperId, onAddToProject, isSaved = false }) => {
+export const WorkspaceReading: React.FC<WorkspaceReadingProps> = ({ 
+  paperId, 
+  onAddToProject, 
+  isSaved = false,
+  initialPage = 1,
+  highlightText
+}) => {
   const { activeProject } = useProjectStore();
   const [paper, setPaper] = useState<Paper | null>(null);
 
   // PDF Viewer State
   const [zoom, setZoom] = useState(1.0);
+  const [currentPage, setCurrentPage] = useState(initialPage);
   const [numPages, setNumPages] = useState<number | null>(null);
   const [selectionMenu, setSelectionMenu] = useState<{ x: number, y: number, text: string } | null>(null);
   const containerRef = useRef<HTMLDivElement>(null);
+  const pageRefs = useRef<Map<number, HTMLDivElement>>(new Map());
 
   useEffect(() => {
     if (!paperId) return;
@@ -56,6 +66,47 @@ export const WorkspaceReading: React.FC<WorkspaceReadingProps> = ({ paperId, onA
 
     loadPaper();
   }, [paperId]);
+
+  // Jump to page and highlight when initialPage or highlightText changes
+  useEffect(() => {
+    if (initialPage && initialPage !== 1 && numPages) {
+      const pageElement = pageRefs.current.get(initialPage);
+      if (pageElement) {
+        setTimeout(() => {
+          pageElement.scrollIntoView({ behavior: 'smooth', block: 'start' });
+          setCurrentPage(initialPage);
+          
+          // If highlight text provided, try to find and highlight it
+          if (highlightText) {
+            // Simple highlighting - find text in page
+            const textLayer = pageElement.querySelector('.react-pdf__Page__textContent');
+            if (textLayer) {
+              const walker = document.createTreeWalker(
+                textLayer,
+                NodeFilter.SHOW_TEXT,
+                null
+              );
+              
+              let node;
+              while ((node = walker.nextNode())) {
+                if (node.textContent && node.textContent.includes(highlightText.slice(0, 50))) {
+                  const parent = node.parentElement;
+                  if (parent) {
+                    parent.style.backgroundColor = 'rgba(255, 255, 0, 0.4)';
+                    parent.style.transition = 'background-color 2s ease-out';
+                    setTimeout(() => {
+                      parent.style.backgroundColor = '';
+                    }, 3000);
+                  }
+                  break;
+                }
+              }
+            }
+          }
+        }, 500);
+      }
+    }
+  }, [initialPage, highlightText, numPages]);
 
   // Handle Zoom
   const handleZoomIn = () => setZoom(prev => Math.min(prev + 0.1, 2.5));
@@ -229,19 +280,27 @@ export const WorkspaceReading: React.FC<WorkspaceReadingProps> = ({ paperId, onA
           }
         >
           {numPages && Array.from(new Array(numPages), (el, index) => (
-            <Page
+            <div 
               key={`page_${index + 1}`}
-              pageNumber={index + 1}
-              scale={zoom}
-              renderTextLayer={true}
-              renderAnnotationLayer={true}
-              className="shadow-xl bg-white"
-              loading={
-                <div className="w-[600px] h-[800px] bg-white flex items-center justify-center text-gray-300 shadow-md">
-                  <Loader2 className="w-6 h-6 animate-spin" />
-                </div>
-              }
-            />
+              ref={(el) => {
+                if (el) pageRefs.current.set(index + 1, el);
+              }}
+              className="relative"
+            >
+              <Page
+                pageNumber={index + 1}
+                scale={zoom}
+                renderTextLayer={true}
+                renderAnnotationLayer={true}
+                className="shadow-xl bg-white"
+                loading={
+                  <div className="w-[600px] h-[800px] bg-white flex items-center justify-center text-gray-300 shadow-md">
+                    <Loader2 className="w-6 h-6 animate-spin" />
+                  </div>
+                }
+              />
+              <div className="text-center text-xs text-gray-400 mt-2 mb-4">Page {index + 1} of {numPages}</div>
+            </div>
           ))}
         </Document>
       </div>

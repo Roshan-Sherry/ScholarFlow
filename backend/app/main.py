@@ -21,7 +21,7 @@ class LimitUploadSize(BaseHTTPMiddleware):
 
 from app.core.config import settings
 from app.models.database import init_db
-from app.api import chat, projects, lab, papers, research, voice
+from app.api import chat, projects, lab, papers, research, voice, agents
 from app.core.logging import setup_logging
 import logging
 
@@ -76,6 +76,7 @@ app.include_router(projects.router, prefix="/api/v1")
 app.include_router(lab.router, prefix="/api/v1")
 app.include_router(papers.router, prefix="/api/v1")
 app.include_router(research.router, prefix="/api/v1")
+app.include_router(agents.router, prefix="/api/v1")  # Specialized agents
 app.include_router(voice.router)  # Voice endpoints for avatar
 
 # Mount Uploads for Static Access (PDF Viewer)

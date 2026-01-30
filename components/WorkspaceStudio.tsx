@@ -193,6 +193,7 @@ interface WorkspaceStudioProps {
     onRedo?: () => void;
     canUndo?: boolean;
     canRedo?: boolean;
+    onOpenPaper?: (paperId: string, page?: number, highlightText?: string) => void;
 }
 
 export const WorkspaceStudio: React.FC<WorkspaceStudioProps> = ({
@@ -203,7 +204,8 @@ export const WorkspaceStudio: React.FC<WorkspaceStudioProps> = ({
     onUndo,
     onRedo,
     canUndo,
-    canRedo
+    canRedo,
+    onOpenPaper
 }) => {
     // --- STATE ---
     const [viewMode, setViewMode] = useState<'visual' | 'source'>('visual');
@@ -615,6 +617,8 @@ export const WorkspaceStudio: React.FC<WorkspaceStudioProps> = ({
                                             isEditing={editingBlockId === block.id}
                                             setEditing={setEditingBlockId}
                                             onChange={handleBlockChange}
+                                            onOpenPaper={onOpenPaper}
+                                            activeProject={activeProject}
                                         />
                                     </div>
                                 ))}

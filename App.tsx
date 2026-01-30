@@ -49,6 +49,7 @@ export default function App() {
 
     // --- LOCAL UI STATE (Transient) ---
     const [activePaper, setActivePaper] = useState<string | null>(null);
+    const [citationContext, setCitationContext] = useState<{ page?: number; highlight?: string } | null>(null);
     const [isResizing, setIsResizing] = useState(false);
     const sidebarResizingRef = useRef({ left: false, right: false });
 
@@ -318,13 +319,15 @@ export default function App() {
         }
     };
 
-    const handleOpenPaper = (paperId: string) => {
+    const handleOpenPaper = (paperId: string, page?: number, highlightText?: string) => {
         setActivePaper(paperId);
+        setCitationContext({ page, highlight: highlightText });
         setViewState(ViewState.READING);
     };
 
     const handleBackToDiscovery = () => {
         setViewState(ViewState.DISCOVERY);
+        setCitationContext(null);
     };
 
     const handleAddToProject = async (paperId: string) => {
@@ -631,6 +634,8 @@ export default function App() {
                             paperId={activePaper}
                             onAddToProject={handleAddToProject}
                             isSaved={activeProject?.papers.some(p => p.id === activePaper) || false}
+                            initialPage={citationContext?.page}
+                            highlightText={citationContext?.highlight}
                         />
                     )
                 }
@@ -645,6 +650,7 @@ export default function App() {
                             onRedo={handleRedo}
                             canUndo={historyStack.length > 0}
                             canRedo={redoStack.length > 0}
+                            onOpenPaper={handleOpenPaper}
                         />
                     )
                 }

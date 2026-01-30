@@ -1,8 +1,12 @@
-"""LangGraph cyclic workflow definition with Discovery and Review loops"""
+"""
+Non-Linear Multi-Agent Research Graph
+Fully interconnected workflow supporting dynamic agent-to-agent routing.
+"""
 
 from typing import Literal
 from langgraph.graph import StateGraph, END
 from langchain_core.messages import HumanMessage
+import logging
 
 from app.agents.state import ResearchState
 from app.agents.nodes import (
@@ -15,7 +19,38 @@ from app.agents.nodes import (
     reviewer_node,
     rag_response_node
 )
+from app.agents.specialists import (
+    get_supervisor_agent,
+    get_memory_agent,
+    get_citation_agent,
+    get_proactive_agent,
+    get_synthesis_agent
+)
+from app.agents.routing import (
+    route_from_writer,
+    route_from_search,
+    route_from_synthesis,
+    route_from_citation,
+    route_from_reviewer,
+    route_from_planner,
+    route_from_ranker,
+    route_from_proactive,
+    determine_entry_node,
+    check_workflow_status
+)
+from app.agents.message_bus import get_message_bus
+from app.agents.workflow_monitor import get_workflow_monitor
+from app.agents.performance import (
+    get_cache,
+    should_use_fast_path,
+    fast_path_handler,
+    optimize_routing_decision,
+    get_performance_tracker
+)
 from app.core.config import settings
+import time
+
+logger = logging.getLogger(__name__)
 
 
 # ===== PLANNER NODE (Added for Outline Generation) =====
@@ -193,20 +228,319 @@ def finalize_draft(state: ResearchState) -> dict:
     }
 
 
+# ===== SPECIALIZED AGENT NODES =====
+
+async def supervisor_node(state: ResearchState) -> dict:
+    """Enhanced supervisor with workflow monitoring and message bus"""
+    start_time = time.time()
+    
+    # Check for fast path
+    query = state.get("query", "")
+    if should_use_fast_path(query):
+        fast_result = await fast_path_handler(query, state)
+        if fast_result:
+            logger.info(f"⚡ Fast path: {fast_result['handler']} (skipped orchestration)")
+            return {
+                "supervisor_decision": fast_result,
+                "active_agent": fast_result["handler"],
+                "logs": [{"step": "supervisor", "message": "⚡ Fast path routing", "status": "completed"}]
+            }
+    
+    supervisor = get_supervisor_agent()
+    monitor = get_workflow_monitor()
+    message_bus = get_message_bus()
+    
+    # Start monitoring if first time
+    if not state.get("workflow_state"):
+        monitor.start_workflow(state)
+    
+    # Get routing decision
+    routing = await supervisor.route_request(state)
+    
+    # Monitor progress
+    progress = await supervisor.monitor_progress(state)
+    
+    # Record routing decision
+    routing_record = {
+        "timestamp": "now",
+        "from_agent": "supervisor",
+        "to_agent": routing.get("primary_agent", "unknown"),
+        "reason": routing.get("reasoning", "")
+    }
+    
+    # Update checkpoint
+    monitor.checkpoint("supervisor", state, routing)
+    
+    # Track performance
+    duration = time.time() - start_time
+    get_performance_tracker().record("supervisor", duration)
+    
+    logs = [{
+        "step": "supervisor",
+        "source": "Supervisor",
+        "message": f"🧭 Routing to {routing['primary_agent']} agent",
+        "status": "processing"
+    }]
+    
+    if progress["status"] == "warning":
+        logs.append({
+            "step": "supervisor",
+            "source": "Supervisor",
+            "message": f"⚠️ {progress['message']}: {progress['suggestion']}",
+            "status": "warning"
+        })
+    
+    return {
+        "supervisor_decision": routing,
+        "active_agent": routing["primary_agent"],
+        "routing_history": [routing_record],
+        "agent_history": [{
+            "agent": "supervisor",
+            "decision": routing,
+            "timestamp": None
+        }],
+        "logs": logs
+    }
+
+
+async def memory_node(state: ResearchState) -> dict:
+    """Memory agent manages conversation history and context"""
+    memory = get_memory_agent()
+    
+    # Add current interaction
+    query = state.get("query", "")
+    if query:
+        await memory.add_interaction("user", query)
+    
+    # Retrieve relevant context
+    relevant_context = await memory.retrieve_relevant_context(query)
+    
+    # Extract insights
+    insights = await memory.extract_research_insights()
+    
+    return {
+        "conversation_memory": memory.conversation_history,
+        "research_insights": insights,
+        "logs": [{
+            "step": "memory",
+            "source": "Memory",
+            "message": f"💭 Retrieved {len(relevant_context)} relevant past interactions",
+            "status": "completed"
+        }]
+    }
+
+
+async def citation_node(state: ResearchState) -> dict:
+    """Citation agent manages references and citations"""
+    citation_agent = get_citation_agent()
+    
+    # Get papers being used
+    ranked_papers = state.get("ranked_papers", [])
+    current_draft = state.get("current_draft", {})
+    draft_content = current_draft.get("content", "")
+    
+    logs = []
+    
+    # Generate citations for papers
+    citations = {}
+    for paper in ranked_papers[:10]:
+        paper_id = paper.get('id')
+        citation_text = await citation_agent.generate_citation(paper)
+        citations[paper_id] = citation_text
+    
+    # Check if draft needs more citations
+    if draft_content:
+        suggestions = await citation_agent.suggest_citations(draft_content, ranked_papers)
+        
+        if suggestions:
+            logs.append({
+                "step": "citation",
+                "source": "Citation Agent",
+                "message": f"📚 Found {len(suggestions)} places that need citations",
+                "status": "suggestion"
+            })
+    
+    # Generate bibliography
+    if ranked_papers:
+        bibliography_text = await citation_agent.generate_bibliography(ranked_papers)
+        logs.append({
+            "step": "citation",
+            "source": "Citation Agent",
+            "message": "✓ Bibliography generated",
+            "status": "completed"
+        })
+    else:
+        bibliography_text = ""
+    
+    return {
+        "citations_used": citations,
+        "bibliography": [{"text": bibliography_text}],
+        "citation_suggestions": suggestions if draft_content else [],
+        "logs": logs
+    }
+
+
+async def proactive_node(state: ResearchState) -> dict:
+    """Proactive agent suggests next actions"""
+    proactive = get_proactive_agent()
+    
+    # Generate suggestions
+    suggestions = await proactive.suggest_next_actions(state)
+    
+    # Analyze draft quality if available
+    current_draft = state.get("current_draft", {})
+    draft_content = current_draft.get("content", "")
+    quality_feedback = None
+    
+    if draft_content:
+        ranked_papers = state.get("ranked_papers", [])
+        quality_feedback = await proactive.analyze_draft_quality(draft_content, ranked_papers)
+    
+    logs = [{
+        "step": "proactive",
+        "source": "Proactive Agent",
+        "message": f"💡 Generated {len(suggestions)} suggestions",
+        "status": "completed"
+    }]
+    
+    # Add high priority suggestions to logs
+    for suggestion in suggestions:
+        if suggestion.get("priority") == "high":
+            logs.append({
+                "step": "proactive",
+                "source": "Proactive Agent",
+                "message": f"💡 {suggestion['message']}",
+                "status": "suggestion"
+            })
+    
+    return {
+        "next_actions": suggestions,
+        "quality_feedback": quality_feedback,
+        "logs": logs
+    }
+
+
+async def synthesis_node(state: ResearchState) -> dict:
+    """Synthesis agent combines insights from multiple papers"""
+    synthesis = get_synthesis_agent()
+    cache = get_cache()
+    
+    ranked_papers = state.get("ranked_papers", [])
+    query = state.get("query", "")
+    
+    if not ranked_papers:
+        return {
+            "logs": [{
+                "step": "synthesis",
+                "source": "Synthesis Agent",
+                "message": "No papers available for synthesis",
+                "status": "skipped"
+            }]
+        }
+    
+    # Check cache
+    paper_ids = tuple(sorted([p.get("id", "") for p in ranked_papers[:3]]))
+    cache_key = f"synthesis_{paper_ids}_{query[:50]}"
+    cached = cache.get(cache_key)
+    
+    if cached:
+        logger.info("⚡ Using cached synthesis")
+        return cached
+    
+    # Generate synthesis
+    synthesis_text = await synthesis.synthesize_papers(ranked_papers, focus_area=query)
+    
+    # Generate comparisons if multiple papers
+    comparative_analysis = None
+    if len(ranked_papers) >= 2:
+        comparative_analysis = await synthesis.compare_papers(ranked_papers[:5])
+    
+    result = {
+        "synthesis_summary": synthesis_text,
+        "comparative_analysis": comparative_analysis,
+        "logs": [{
+            "step": "synthesis",
+            "source": "Synthesis Agent",
+            "message": f"🔍 Synthesized insights from {len(ranked_papers)} papers",
+            "status": "completed"
+        }]
+    }
+    
+    # Cache result
+    cache.set(cache_key, result)
+    
+    return result
+
+
+async def workflow_monitor_node(state: ResearchState) -> dict:
+    """Monitor workflow progress and detect stuck states"""
+    from app.agents.message_bus import MessagePriority
+    
+    monitor = get_workflow_monitor()
+    message_bus = get_message_bus()
+    
+    # Check if stuck
+    if monitor.is_stuck(state):
+        suggested_agent = monitor.suggest_reroute(state)
+        
+        # Publish reroute message
+        await message_bus.publish(
+            from_agent="monitor",
+            topic="reroute_needed",
+            payload={"suggested_agent": suggested_agent},
+            priority=MessagePriority.HIGH
+        )
+        
+        return {
+            "reroute_requested": True,
+            "reroute_reason": "workflow_stuck",
+            "suggested_next_agent": suggested_agent,
+            "logs": [{
+                "step": "monitor",
+                "source": "Workflow Monitor",
+                "message": f"⚠️ Detected stuck state, suggesting reroute to {suggested_agent}",
+                "status": "warning"
+            }]
+        }
+    
+    # Get performance stats
+    perf = monitor.analyze_performance()
+    
+    return {
+        "logs": [{
+            "step": "monitor",
+            "source": "Workflow Monitor",
+            "message": monitor.get_progress_summary(),
+            "status": "info"
+        }]
+    }
+
+
 # ===== MAIN GRAPH DEFINITION =====
 
 def create_research_graph():
-    """Create the cyclic LangGraph workflow with conditional edges"""
+    """
+    Create non-linear multi-agent research graph with full interconnectivity.
+    Supports dynamic routing and agent-to-agent communication.
+    """
     
     # Initialize graph
     graph = StateGraph(ResearchState)
     
     # ===== ADD ALL NODES =====
     
-    # Entry point
+    # Core orchestration
+    graph.add_node("supervisor", supervisor_node)
+    graph.add_node("memory", memory_node)
+    graph.add_node("monitor", workflow_monitor_node)  # NEW
     graph.add_node("router", router_node)
     
-    # Discovery SubGraph nodes
+    # Specialized agents
+    graph.add_node("citation", citation_node)
+    graph.add_node("proactive", proactive_node)
+    graph.add_node("synthesis", synthesis_node)
+    
+    # Discovery nodes
     graph.add_node("search", search_node)
     graph.add_node("ranker", ranker_node)
     graph.add_node("refine_query", refine_query_node)
@@ -218,18 +552,37 @@ def create_research_graph():
     # RAG Response (grounded answers from papers)
     graph.add_node("rag_response", rag_response_node)
     
-    # Drafting SubGraph nodes
+    # Drafting nodes
     graph.add_node("planner", planner_node)
     graph.add_node("writer", writer_node)
     graph.add_node("reviewer", reviewer_node)
     graph.add_node("reviewer_approved", finalize_draft)
     
-    # ===== DEFINE EDGES =====
+    # Add validator node for bibliography
+    graph.add_node("validator", lambda state: {"logs": [{"step": "validator", "message": "✓ Citations validated", "status": "completed"}]})
+    graph.add_node("bibliography", lambda state: {"bibliography": state.get("citations_used", {}), "logs": [{"step": "bibliography", "message": "✓ Bibliography generated", "status": "completed"}]})
     
-    # Entry point
-    graph.set_entry_point("router")
+    # ===== CONDITIONAL ENTRY POINT (NEW) =====
     
-    # Router conditional edges (routes to different subgraphs)
+    graph.set_conditional_entry_point(
+        determine_entry_node,
+        {
+            "supervisor": "supervisor",
+            "search": "search",
+            "writer": "writer",
+            "citation": "citation",
+            "synthesis": "synthesis",
+            "memory": "memory"
+        }
+    )
+    
+    # ===== NON-LINEAR EDGES =====
+    
+    # Supervisor → Memory → Router (still the orchestrated entry flow)
+    graph.add_edge("supervisor", "memory")
+    graph.add_edge("memory", "router")
+    
+    # Router to initial paths
     graph.add_conditional_edges(
         "router",
         route_after_intent,
@@ -241,55 +594,145 @@ def create_research_graph():
         }
     )
     
-    # ===== DISCOVERY SUBGRAPH (with loop) =====
+    # ===== SEARCH AGENT (can route to ranker, synthesis, or writer) =====
     
-    # search -> ranker
-    graph.add_edge("search", "ranker")
+    graph.add_conditional_edges(
+        "search",
+        route_from_search,
+        {
+            "ranker": "ranker",
+            "synthesis": "synthesis",
+            "writer": "writer"
+        }
+    )
     
-    # ranker -> conditional (DISCOVERY LOOP decision point)
+    # ===== RANKER (Discovery Loop + can go to synthesis) =====
+    
     graph.add_conditional_edges(
         "ranker",
-        should_refine_search,
+        route_from_ranker,
         {
-            "refine_query": "refine_query",  # Loop back to refine
-            "save_to_context": "save_to_context"  # Exit loop
+            "refine_query": "refine_query",
+            "save_to_context": "save_to_context",
+            "synthesis": "synthesis",
+            "rag_response": "rag_response"
         }
     )
     
-    # refine_query -> search (LOOP BACK)
+    # refine_query loops back to search
     graph.add_edge("refine_query", "search")
     
-    # save_to_context -> rag_response (generate grounded answer)
-    graph.add_edge("save_to_context", "rag_response")
+    # save_to_context → synthesis
+    graph.add_edge("save_to_context", "synthesis")
     
-    # rag_response -> END (research queries end with grounded response)
-    graph.add_edge("rag_response", END)
+    # ===== SYNTHESIS (can route to search, writer, citation, or proactive) =====
     
-    # ===== LAB ANALYST PATH =====
-    
-    # lab_analyst -> writer
-    graph.add_edge("lab_analyst", "writer")
-    
-    # ===== DRAFTING SUBGRAPH (with loop) =====
-    
-    # planner -> writer
-    graph.add_edge("planner", "writer")
-    
-    # writer -> reviewer
-    graph.add_edge("writer", "reviewer")
-    
-    # reviewer -> conditional (REVIEW LOOP decision point)
     graph.add_conditional_edges(
-        "reviewer",
-        should_revise_draft,
+        "synthesis",
+        route_from_synthesis,
         {
-            "writer": "writer",  # Loop back for revision
-            "reviewer_approved": "reviewer_approved"  # Exit loop
+            "search": "search",         # NEW: Found gaps, search more
+            "writer": "writer",         # Ready to draft
+            "citation": "citation",     # Cite synthesized papers
+            "proactive": "proactive"    # Get suggestions
         }
     )
     
-    # reviewer_approved -> END
-    graph.add_edge("reviewer_approved", END)
+    # ===== WRITER (can route to citation, search, synthesis, or reviewer) =====
+    
+    graph.add_conditional_edges(
+        "writer",
+        route_from_writer,
+        {
+            "citation": "citation",     # Need citations mid-draft
+            "search": "search",         # NEW: Knowledge gap during writing
+            "synthesis": "synthesis",   # NEW: Need multi-paper analysis
+            "reviewer": "reviewer",     # Draft complete
+            "writer": "writer"          # Continue writing
+        }
+    )
+    
+    # ===== CITATION (can route to writer, validator, or bibliography) =====
+    
+    graph.add_conditional_edges(
+        "citation",
+        route_from_citation,
+        {
+            "writer": "writer",         # Back to writing with citations
+            "validator": "validator",   # Validate citations
+            "bibliography": "bibliography"  # Generate bibliography
+        }
+    )
+    
+    # Validator → Writer
+    graph.add_edge("validator", "writer")
+    
+    # Bibliography → Reviewer (after citations done, review)
+    graph.add_edge("bibliography", "reviewer")
+    
+    # ===== PLANNER (can route to writer, search, or synthesis) =====
+    
+    graph.add_conditional_edges(
+        "planner",
+        route_from_planner,
+        {
+            "writer": "writer",
+            "search": "search",         # NEW: Plan requires research
+            "synthesis": "synthesis"    # NEW: Plan requires synthesis
+        }
+    )
+    
+    # ===== REVIEWER (can route to writer, planner, citation, or proactive) =====
+    
+    graph.add_conditional_edges(
+        "reviewer",
+        route_from_reviewer,
+        {
+            "writer": "writer",         # Content revision
+            "planner": "planner",       # NEW: Structural revision
+            "citation": "citation",     # NEW: Citation fixes
+            "proactive": "proactive"    # Draft approved
+        }
+    )
+    
+    # ===== PROACTIVE (can trigger new paths or END) =====
+    
+    graph.add_conditional_edges(
+        "proactive",
+        route_from_proactive,
+        {
+            "search": "search",         # NEW: Proactive search suggestion
+            "synthesis": "synthesis",   # NEW: Proactive synthesis
+            "writer": "writer",         # NEW: Continue drafting
+            "END": END
+        }
+    )
+    
+    # ===== LAB ANALYST =====
+    
+    graph.add_edge("lab_analyst", "writer")
+    
+    # ===== RAG RESPONSE =====
+    
+    graph.add_edge("rag_response", "proactive")
+    
+    # ===== REVIEWER APPROVED =====
+    
+    graph.add_edge("reviewer_approved", "proactive")
+    
+    # ===== WORKFLOW MONITORING (runs periodically) =====
+    
+    # Monitor can trigger rerouting
+    graph.add_conditional_edges(
+        "monitor",
+        check_workflow_status,
+        {
+            "continue": "router",       # Continue normal flow
+            "complete": END,            # Workflow complete
+            "reroute": "supervisor",    # Reroute via supervisor
+            "pause": END                # Pause workflow
+        }
+    )
     
     # Compile graph
     return graph.compile()

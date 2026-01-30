@@ -11,6 +11,7 @@ from app.core.config import settings
 from app.models.database import LibraryItem, LabAsset, get_db
 from app.services.vector_store import vector_store
 from app.services.rag_grounding import generate_grounded_response, format_paper_context
+from app.agents.specialists import get_memory_agent, get_citation_agent
 
 
 # ===== ROUTER NODE =====
@@ -19,6 +20,10 @@ async def router_node(state: ResearchState) -> Dict:
     """Classify user intent and route to appropriate subgraph"""
     
     query = state["query"]
+    memory = get_memory_agent()
+    
+    # Add interaction to memory
+    await memory.add_interaction("user", query)
     
     # Log step
     log_entry = {
@@ -31,8 +36,17 @@ async def router_node(state: ResearchState) -> Dict:
     # Classify intent using AI
     intent = await ai_client.classify_intent(query)
     
+    # Log agent activity
+    agent_log = {
+        "agent": "router",
+        "action": "classify_intent",
+        "result": intent,
+        "timestamp": None
+    }
+    
     return {
         "intent": intent,
+        "agent_history": [agent_log],
         "logs": [
             log_entry,
             {
@@ -375,12 +389,25 @@ async def writer_node(state: ResearchState) -> Dict:
     # === GENERATE TEXT ===
     draft_text = await ai_client.generate_text(prompt, temperature=0.7)
     
+    # Add to memory
+    memory = get_memory_agent()
+    await memory.add_interaction("assistant", f"Generated {current_section} section", {
+        "section": current_section,
+        "word_count": len(draft_text.split())
+    })
+    
     return {
         "current_draft": {
             "section": current_section.title() if current_section else "General",
             "content": draft_text,
             "status": "pending_review"
         },
+        "agent_history": [{
+            "agent": "writer",
+            "action": "generate_draft",
+            "section": current_section,
+            "timestamp": None
+        }],
         "logs": [
             log_entry,
             {
@@ -480,43 +507,55 @@ async def rag_response_node(state: ResearchState) -> Dict:
         }
         logs.append(log_entry)
         
-        # Search user's library for relevant chunks
+        # Search user's library for relevant chunks WITH METADATA (Page numbers!)
         try:
-            context_chunks = await vector_store.search_similar(
+            context_results = await vector_store.search_similar(
                 project_id=project_id,
                 query=query,
                 paper_ids=selected_paper_ids,
-                top_k=5
+                top_k=8,  # Increased context window
+                include_metadata=True
             )
             
-            if context_chunks and len(context_chunks) > 0:
-                # Found relevant content in library!
-                library_context = context_chunks
+            if context_results:
+                # Get unique paper IDs found
+                found_paper_ids = list(set(r.get("paper_id") for r in context_results if r.get("paper_id")))
                 
-                # Get paper metadata for citations
+                # Fetch metadata for these papers
                 from app.models.database import LibraryItem
                 db = next(get_db())
                 try:
-                    papers = db.query(LibraryItem).filter(
-                        LibraryItem.id.in_(selected_paper_ids)
+                    db_papers = db.query(LibraryItem).filter(
+                        LibraryItem.id.in_(found_paper_ids)
                     ).all()
+                    paper_map = {p.id: p for p in db_papers}
                     
-                    for paper in papers:
-                        library_papers_info.append({
-                            "title": paper.title,
-                            "authors": paper.authors if isinstance(paper.authors, str) else ", ".join(paper.authors[:3]) if paper.authors else "Unknown",
-                            "year": paper.year,
-                            "abstract": paper.abstract or "",
-                            "source": "User Library",
-                            "pdf_path": paper.pdf_path
-                        })
+                    # Construct specific chunk objects for the LLM
+                    for result in context_results:
+                        p_id = result.get("paper_id")
+                        paper = paper_map.get(p_id)
+                        
+                        if paper:
+                            library_papers_info.append({
+                                "title": paper.title,
+                                "authors": paper.authors if isinstance(paper.authors, str) else ", ".join(paper.authors[:3]) if paper.authors else "Unknown",
+                                "year": paper.year,
+                                "text": result.get("text"),  # Use specific chunk text
+                                "page_number": result.get("page_number"),  # Use page number!
+                                "source": "User Library",
+                                "pdf_path": paper.pdf_path,
+                                "paperId": p_id
+                            })
+                            
+                    library_context = True # Flag that we found stuff
+                    
                 finally:
                     db.close()
                 
                 logs.append({
                     "step": "rag_response",
                     "source": "ContextShelf",
-                    "message": f"✓ Found {len(context_chunks)} relevant passages in your library",
+                    "message": f"✓ Found {len(library_papers_info)} relevant passages in your library",
                     "status": "completed"
                 })
         except Exception as e:
@@ -528,18 +567,39 @@ async def rag_response_node(state: ResearchState) -> Dict:
             })
     
     # ===== STEP 2: DECIDE DATA SOURCE =====
-    if library_context and library_papers_info:
-        # Use library content (Context Shelf)
+    if library_papers_info:
+        # FORCE LIBRARY USE: If we found relevant chunks, strictly use them
         papers_to_use = library_papers_info
         source_type = "library"
         logs.append({
             "step": "rag_response",
             "source": "ResearchAssistant",
-            "message": "📖 Answering from YOUR library papers (no external search needed)",
+            "message": "📖 Answering from YOUR library papers (Shelf Priority Enforced)",
             "status": "processing"
         })
+    elif selected_paper_ids:
+        # STRICT FALLBACK: User selected papers but we found nothing?
+        # Don't switch to ArXiv silently. Be honest.
+        return {
+            "current_draft": {
+                "section": "Response",
+                "content": """I searched your selected papers but couldn't find specific information matching your question.
+
+**Suggestions:**
+1. Try rephrasing your question.
+2. Ensure the relevant papers are selected in the sidebar.
+3. If you want to search external papers (ArXiv), simply unselect your library papers or ask me to "Search external sources".""",
+                "status": "no_context_found"
+            },
+            "logs": logs + [{
+                "step": "rag_response",
+                "source": "ResearchAssistant",
+                "message": "⚠ No relevant info found in selected papers",
+                "status": "warning"
+            }]
+        }
     else:
-        # Fallback to ArXiv/Scholar results
+        # Fallback to ArXiv/Scholar results (only if NO shelf papers selected)
         papers_to_use = ranked_papers if ranked_papers else found_papers
         source_type = "external"
         

@@ -260,6 +260,22 @@ export async function* streamChatWorkflow(
   }
 }
 
+export const fetchChatHistory = async (projectId: string): Promise<any[]> => {
+    try {
+        const { data } = await apiClient.get<any[]>(`/projects/${projectId}/chat`);
+        return data.map(msg => ({
+            id: `msg-${Math.random()}`, // Backend doesn't store IDs per message in JSON yet
+            role: msg.role === 'user' ? 'user' : 'agent',
+            content: msg.content,
+            sources: msg.sources || [],
+            timestamp: msg.timestamp
+        }));
+    } catch (error) {
+        console.error('Error fetching chat history:', error);
+        return [];
+    }
+};
+
 /**
  * Stream section drafting
  */

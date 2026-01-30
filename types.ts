@@ -28,6 +28,13 @@ export interface Paper {
   pdfUrl?: string;
 }
 
+export interface Citation {
+  paperId: string;
+  pageNumber?: number;
+  textSnippet?: string;
+  citationKey?: string; // e.g., "[1]" or "\cite{paper1}"
+}
+
 export interface AgentLog {
   id: string;
   source: 'Router' | 'Ranker' | 'Synthesizer' | 'Co-Author' | 'System' | 'Thought';

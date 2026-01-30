@@ -119,6 +119,26 @@ async def stream_workflow(
                         }
                         yield f"data: {json.dumps(text_event)}\n\n"
                     
+                    # NEW: Capture synthesis summary (from Synthesis Node)
+                    if state_update.get("synthesis_summary"):
+                        content = state_update["synthesis_summary"]
+                        final_response = content
+                        logger.info(f"Captured synthesis: {len(content)} chars")
+                        
+                        text_event = {
+                            "type": "text",
+                            "data": content
+                        }
+                        yield f"data: {json.dumps(text_event)}\n\n"
+                        
+                    # NEW: Capture proactive suggestions
+                    if state_update.get("next_actions"):
+                        actions = state_update["next_actions"]
+                        # We can send this as a specific event or append to logs
+                        # For now, let's verify if we should append to answer or just log
+                        logger.info(f"Captured {len(actions)} proactive actions")
+
+                    
                     # Check for completion
                     if current_draft.get("status") == "completed":
                         logger.info("Draft marked as completed, breaking loop")
@@ -156,6 +176,51 @@ async def stream_workflow(
             }
             yield f"data: {json.dumps(complete_event)}\n\n"
         
+            # Save detailed chat history
+            try:
+                # Use a new DB session for saving to avoid async/sync conflicts or staleness
+                from app.models.database import SessionLocal, ChatSession
+                save_db = SessionLocal()
+                
+                # Check for existing session or create new
+                chat_session = save_db.query(ChatSession).filter(
+                    ChatSession.project_id == request.project_id
+                ).first()
+                
+                if not chat_session:
+                    chat_session = ChatSession(
+                        project_id=request.project_id,
+                        messages=[]
+                    )
+                    save_db.add(chat_session)
+                
+                # Prepare new messages
+                new_messages = [
+                    {
+                        "role": "user", 
+                        "content": request.message,
+                        "timestamp": str(asyncio.get_event_loop().time()) 
+                    },
+                    {
+                        "role": "assistant", 
+                        "content": final_response or "I couldn't generate a response.",
+                        "sources": [p['id'] for p in formatted_papers] if final_papers else [],
+                        "timestamp": str(asyncio.get_event_loop().time())
+                    }
+                ]
+                
+                # Append to existing (need to reassignment for SQLAlchemy JSON mutation detection sometimes)
+                current_msgs = list(chat_session.messages) if chat_session.messages else []
+                current_msgs.extend(new_messages)
+                chat_session.messages = current_msgs
+                
+                save_db.commit()
+                logger.info(f"Saved {len(new_messages)} messages to chat history for project {request.project_id}")
+                save_db.close()
+                
+            except Exception as e:
+                logger.error(f"Failed to save chat history: {e}")
+
         except Exception as e:
             error_event = {
                 "type": "error",

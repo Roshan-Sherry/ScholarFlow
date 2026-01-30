@@ -20,14 +20,14 @@ class Settings(BaseSettings):
     llm_provider: str = "hybrid"  # "gemini", "ollama", "hybrid"
     
     # Gemini Config (Fallback & Vision)
-    text_model_name: str = "gemini-1.5-flash"
-    fast_model_name: str = "gemini-1.5-flash"
-    vision_model_name: str = "gemini-1.5-pro"
+    text_model_name: str = "scholarmate"
+    fast_model_name: str = "scholarmate"
+    vision_model_name: str = "gemini-1.5-flash"
     
     # Ollama Config (Primary for hybrid mode)
     ollama_base_url: str = "http://localhost:11434"
-    ollama_model_fast: str = "scholarmate"  # Use custom model for EVERYTHING
-    ollama_model_smart: str = "scholarmate"  # Use custom model for EVERYTHING
+    ollama_model_fast: str = "llama3.2:1b"  # Fast 1B model for quick tasks (routing, intent)
+    ollama_model_smart: str = "scholarmate"  # Smart 3B model for quality tasks (writing, synthesis)
     
     # Hybrid Mode Settings
     use_ollama_for_chat: bool = True     # Chat -> Ollama
