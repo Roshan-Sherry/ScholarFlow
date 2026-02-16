@@ -28,6 +28,14 @@ export interface Paper {
   pdfUrl?: string;
 }
 
+export interface LibraryPage {
+  items: Paper[];
+  total: number;
+  page: number;
+  limit: number;
+  pages: number;
+}
+
 export interface Citation {
   paperId: string;
   pageNumber?: number;

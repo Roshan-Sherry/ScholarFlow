@@ -8,9 +8,10 @@ from sqlalchemy.orm import Session
 from datetime import datetime
 from pathlib import Path
 import os
+import math
 
 from app.models.database import get_db, LibraryItem, Project
-from app.models.schemas import LibraryItemResponse, PaperSearchResponse, PaperSearchResult
+from app.models.schemas import LibraryItemResponse, LibraryPageResponse, PaperSearchResponse, PaperSearchResult
 from app.services.vector_store import vector_store
 from app.services.paper_search import search_all_sources
 from app.core.config import settings
@@ -75,6 +76,35 @@ async def add_paper_to_library(
         logger.error(f"Error adding paper to library: {e}", exc_info=True)
         db.rollback()
         raise HTTPException(status_code=500, detail=str(e))
+
+
+@router.get("/library", response_model=LibraryPageResponse)
+async def list_library_items(
+    project_id: str,
+    page: int = 1,
+    limit: int = 10,
+    db: Session = Depends(get_db)
+):
+    """List library items for a project with pagination"""
+    if page < 1:
+        raise HTTPException(status_code=400, detail="page must be >= 1")
+    if limit < 1 or limit > 100:
+        raise HTTPException(status_code=400, detail="limit must be between 1 and 100")
+
+    query = db.query(LibraryItem).filter(LibraryItem.project_id == project_id)
+    total = query.count()
+    pages = max(1, math.ceil(total / limit))
+    offset = (page - 1) * limit
+
+    items = query.order_by(LibraryItem.created_at.desc()).offset(offset).limit(limit).all()
+
+    return {
+        "items": items,
+        "total": total,
+        "page": page,
+        "limit": limit,
+        "pages": pages
+    }
 
 
 @router.get("/search", response_model=PaperSearchResponse)

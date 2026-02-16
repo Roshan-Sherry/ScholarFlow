@@ -107,6 +107,15 @@ class LibraryItemResponse(BaseModel):
         from_attributes = True
 
 
+class LibraryPageResponse(BaseModel):
+    """Paginated library response"""
+    items: List[LibraryItemResponse]
+    total: int
+    page: int
+    limit: int
+    pages: int
+
+
 # ===== LAB ASSET SCHEMAS =====
 
 class LabAssetCreate(BaseModel):

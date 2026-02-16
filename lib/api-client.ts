@@ -8,7 +8,8 @@ import type {
   Project, 
   ProjectAsset, 
   Paper,
-  OutlineSection 
+  OutlineSection,
+  LibraryPage
 } from '../types';
 
 // Create axios instance
@@ -81,6 +82,36 @@ export const fetchProject = async (id: string): Promise<Project> => {
     assets: [],
     methodology: data.methodology,
     findings: data.findings
+  };
+};
+
+export const fetchLibraryPage = async (
+  projectId: string,
+  page: number = 1,
+  limit: number = 10
+): Promise<LibraryPage> => {
+  const { data } = await apiClient.get(`/papers/library`, {
+    params: { project_id: projectId, page, limit }
+  });
+
+  const rootUrl = (apiClient.defaults.baseURL || '').replace(/\/api\/v1\/?$/, '');
+
+  return {
+    items: (data.items || []).map((p: any) => ({
+      id: p.id,
+      title: p.title,
+      authors: p.authors || [],
+      year: p.year,
+      summary: p.abstract || '',
+      tags: [],
+      pdfUrl: p.pdf_path
+        ? `${rootUrl}/uploads/${p.pdf_path.split(/[/\\]/).pop()}`
+        : (p.url || (p.arxiv_id ? `https://arxiv.org/pdf/${p.arxiv_id}.pdf` : undefined))
+    })),
+    total: data.total || 0,
+    page: data.page || page,
+    limit: data.limit || limit,
+    pages: data.pages || 1
   };
 };
 

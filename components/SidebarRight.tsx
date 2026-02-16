@@ -1,11 +1,11 @@
 import React, { useRef, useEffect, useState } from 'react';
-import { AppMode, AgentState, AgentLog, Project, ProjectAsset, OutlineSection, ViewState } from '../types';
+import { AppMode, AgentState, AgentLog, Project, ProjectAsset, OutlineSection, ViewState, LibraryPage } from '../types';
 import { Activity, X, PanelLeftClose, PanelRightClose, Terminal, Cpu, Zap, Send, Loader2, FileImage, Table, Wand2, Database, Check, RefreshCw, ChevronDown, ChevronRight, MessageSquare, Sparkles, Eraser, PlayCircle, PenTool, BookOpen, Library, Quote } from 'lucide-react';
 import { AgentAvatar } from './AgentAvatar';
 // import { MOCK_PAPERS } from '../constants'; (Removed)
 import Markdown from 'react-markdown';
 import { useStreamingChat, useStreamingDraft } from '../hooks/useStreaming';
-import { generateOutline } from '../lib/api-client';
+import { generateOutline, fetchLibraryPage } from '../lib/api-client';
 
 interface SidebarRightProps {
     appMode: AppMode;
@@ -90,6 +90,11 @@ export const SidebarRight: React.FC<SidebarRightProps> = ({
 
     const projectPapers = activeProject?.papers || [];
 
+    // Library pagination state
+    const [libraryPage, setLibraryPage] = useState<LibraryPage | null>(null);
+    const [libraryPageIndex, setLibraryPageIndex] = useState(1);
+    const [isLibraryLoading, setIsLibraryLoading] = useState(false);
+
     // --- PDF CHAT STATE ---
     const [pdfChatInput, setPdfChatInput] = useState('');
     const [pdfChatMessages, setPdfChatMessages] = useState<{ role: 'user' | 'agent', text: string }[]>([]);
@@ -166,6 +171,34 @@ export const SidebarRight: React.FC<SidebarRightProps> = ({
     useEffect(() => {
         chatEndRef.current?.scrollIntoView({ behavior: 'smooth' });
     }, [chatMessages, activeTab]);
+
+    // Reset library pagination on project change
+    useEffect(() => {
+        setLibraryPageIndex(1);
+    }, [activeProject?.id]);
+
+    // Fetch paginated library
+    useEffect(() => {
+        const loadLibrary = async () => {
+            if (!activeProject) {
+                setLibraryPage(null);
+                return;
+            }
+
+            setIsLibraryLoading(true);
+            try {
+                const page = await fetchLibraryPage(activeProject.id, libraryPageIndex, 10);
+                setLibraryPage(page);
+            } catch (error) {
+                console.error('Failed to load library page:', error);
+                setLibraryPage(null);
+            } finally {
+                setIsLibraryLoading(false);
+            }
+        };
+
+        loadLibrary();
+    }, [activeProject, libraryPageIndex]);
 
 
     const toggleTab = (tab: 'PLAN' | 'LIBRARY' | 'ASSETS') => {
@@ -664,14 +697,20 @@ export const SidebarRight: React.FC<SidebarRightProps> = ({
                                 {/* LIBRARY VIEW */}
                                 {activeTab === 'LIBRARY' && (
                                     <div className="space-y-3 pb-4">
-                                        <div className="text-[10px] font-bold text-gray-500 uppercase tracking-wider px-1">Connected Papers ({projectPapers.length})</div>
-                                        {projectPapers.length === 0 ? (
+                                        <div className="text-[10px] font-bold text-gray-500 uppercase tracking-wider px-1">
+                                            Connected Papers ({libraryPage?.total ?? projectPapers.length})
+                                        </div>
+                                        {isLibraryLoading ? (
+                                            <div className="text-center py-6 text-gray-600 italic text-xs border border-dashed border-gray-800 rounded">
+                                                Loading library...
+                                            </div>
+                                        ) : (libraryPage?.items?.length ?? projectPapers.length) === 0 ? (
                                             <div className="text-center py-6 text-gray-600 italic text-xs border border-dashed border-gray-800 rounded">
                                                 No papers connected to this project.
                                             </div>
                                         ) : (
                                             <div className="space-y-2">
-                                                {projectPapers.map(paper => (
+                                                {(libraryPage?.items || projectPapers).map(paper => (
                                                     <div key={paper.id} className="bg-[#18181b] border border-gray-800 rounded-lg p-3 hover:border-indigo-500/50 transition-colors group">
                                                         <div className="flex justify-between items-start gap-2">
                                                             <div className="min-w-0">
@@ -700,6 +739,26 @@ export const SidebarRight: React.FC<SidebarRightProps> = ({
                                                         </div>
                                                     </div>
                                                 ))}
+                                            </div>
+                                        )}
+
+                                        {(libraryPage?.pages || 1) > 1 && (
+                                            <div className="flex items-center justify-between pt-2 text-[10px] text-gray-500">
+                                                <button
+                                                    onClick={() => setLibraryPageIndex(prev => Math.max(1, prev - 1))}
+                                                    disabled={libraryPageIndex <= 1}
+                                                    className="px-2 py-1 rounded border border-gray-800 disabled:opacity-50"
+                                                >
+                                                    Prev
+                                                </button>
+                                                <span className="font-semibold">Page {libraryPageIndex} of {libraryPage?.pages || 1}</span>
+                                                <button
+                                                    onClick={() => setLibraryPageIndex(prev => Math.min(libraryPage?.pages || 1, prev + 1))}
+                                                    disabled={libraryPageIndex >= (libraryPage?.pages || 1)}
+                                                    className="px-2 py-1 rounded border border-gray-800 disabled:opacity-50"
+                                                >
+                                                    Next
+                                                </button>
                                             </div>
                                         )}
                                     </div>

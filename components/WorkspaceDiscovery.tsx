@@ -66,13 +66,47 @@ export const WorkspaceDiscovery: React.FC<WorkspaceDiscoveryProps> = ({
         }
     };
 
-    // Load Chat History
+    // Load Chat History for active session
     useEffect(() => {
         const loadHistory = async () => {
-            // ... existing load history logic
+            if (!activeProjectId) return;
+            if (!activeSessionId) {
+                setTurns([]);
+                return;
+            }
+
+            const history = await fetchChatHistory(activeProjectId, activeSessionId);
+            if (!history || history.length === 0) {
+                setTurns([]);
+                return;
+            }
+
+            const mappedTurns: ResearchTurn[] = history.map((msg, index) => {
+                if (msg.role === 'user') {
+                    return {
+                        id: `history-${index}-user`,
+                        role: 'user',
+                        query: msg.content,
+                        status: 'completed',
+                        logs: []
+                    };
+                }
+
+                return {
+                    id: `history-${index}-agent`,
+                    role: 'agent',
+                    status: 'completed',
+                    logs: [],
+                    answer: msg.content,
+                    sources: msg.sources || []
+                };
+            });
+
+            setTurns(mappedTurns);
         };
-        // ...
-    }, [activeProjectId]);
+
+        loadHistory();
+    }, [activeProjectId, activeSessionId, setTurns]);
 
     // ... (rest of useEffects)
 
@@ -372,7 +406,9 @@ export const WorkspaceDiscovery: React.FC<WorkspaceDiscoveryProps> = ({
                                                                         {isAdded ? <Check className="w-3 h-3" /> : <Plus className="w-3 h-3" />}
                                                                     </button>
                                                                 </div>
-                                                                <div className="text-xs text-gray-500 font-mono mb-2">{paper.authors[0]} • {paper.year}</div>
+                                                                <div className="text-xs text-gray-500 font-mono mb-2">
+                                                                    {(paper.authors && paper.authors.length > 0 ? paper.authors[0] : 'Unknown')} • {paper.year}
+                                                                </div>
                                                                 <div className="text-xs text-gray-600 line-clamp-2 leading-relaxed">{paper.summary}</div>
                                                             </div>
                                                         )

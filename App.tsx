@@ -201,6 +201,8 @@ export default function App() {
         if (!project) return;
 
         setActiveProject(project);
+        setActiveSessionId(null);
+        setDiscoveryTurns([]);
 
         if (project.type === ProjectType.LIT_REVIEW) {
             setAppMode(AppMode.RESEARCH);
@@ -505,7 +507,10 @@ export default function App() {
         pendingMessage: pendingMessage,
         onClearPendingMessage: () => setPendingMessage(null),
         activeSessionId: activeSessionId,
-        onSessionSelect: setActiveSessionId
+        onSessionSelect: (id: string | null) => {
+            setActiveSessionId(id);
+            setDiscoveryTurns([]);
+        }
     };
 
     const sidebarRightProps = {
@@ -629,7 +634,10 @@ export default function App() {
                             selectedResultIds={discoverySelectedResultIds}
                             setSelectedResultIds={setDiscoverySelectedResultIds}
                             activeSessionId={activeSessionId}
-                            onSessionChange={setActiveSessionId}
+                            onSessionChange={(id) => {
+                                setActiveSessionId(id);
+                                setDiscoveryTurns([]);
+                            }}
                         />
                     )
                 }

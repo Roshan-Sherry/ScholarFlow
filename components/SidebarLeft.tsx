@@ -4,8 +4,8 @@ import {
     Settings, ArrowLeft, Upload, X, PanelRightClose, PanelLeftClose,
     Bot, BookOpen, PlusCircle, CheckSquare, Square, MoreVertical, Activity, PenTool, MessageSquarePlus, MessageSquare
 } from 'lucide-react';
-import { AppMode, ViewState, Project, ProjectAsset, ProjectFile, AgentState, AgentLog, ChatSession } from '../types';
-import { fetchChatSessions, createChatSession } from '../lib/api-client';
+import { AppMode, ViewState, Project, ProjectAsset, ProjectFile, AgentState, AgentLog, ChatSession, LibraryPage } from '../types';
+import { fetchChatSessions, createChatSession, fetchLibraryPage } from '../lib/api-client';
 import { AgentAvatar } from './AgentAvatar';
 
 interface SidebarLeftProps {
@@ -75,6 +75,11 @@ export const SidebarLeft: React.FC<SidebarLeftProps> = ({
     // Use real papers from the project, initialized empty if null
     const projectPapers = activeProject?.papers || [];
 
+    // Library pagination state
+    const [libraryPage, setLibraryPage] = useState<LibraryPage | null>(null);
+    const [libraryPageIndex, setLibraryPageIndex] = useState(1);
+    const [isLibraryLoading, setIsLibraryLoading] = useState(false);
+
     // Local State
     const [sessions, setSessions] = useState<ChatSession[]>([]);
     const [sidebarTab, setSidebarTab] = useState<'library' | 'chats'>('library');
@@ -87,6 +92,34 @@ export const SidebarLeft: React.FC<SidebarLeftProps> = ({
             setSessions([]);
         }
     }, [activeProject]);
+
+    // Reset library pagination on project change
+    useEffect(() => {
+        setLibraryPageIndex(1);
+    }, [activeProject?.id]);
+
+    // Fetch paginated library
+    useEffect(() => {
+        const loadLibrary = async () => {
+            if (!activeProject) {
+                setLibraryPage(null);
+                return;
+            }
+
+            setIsLibraryLoading(true);
+            try {
+                const page = await fetchLibraryPage(activeProject.id, libraryPageIndex, 10);
+                setLibraryPage(page);
+            } catch (error) {
+                console.error('Failed to load library page:', error);
+                setLibraryPage(null);
+            } finally {
+                setIsLibraryLoading(false);
+            }
+        };
+
+        loadLibrary();
+    }, [activeProject, libraryPageIndex]);
 
     // Create New Session Handler
     const handleNewChat = async () => {
@@ -127,7 +160,10 @@ export const SidebarLeft: React.FC<SidebarLeftProps> = ({
     };
 
     // Derived Assets
-    const activePaper = hoveredPaper ? projectPapers.find(p => p.id === hoveredPaper.id) : null;
+    const libraryItems = libraryPage?.items || projectPapers;
+    const totalPapers = libraryPage?.total ?? projectPapers.length;
+    const totalPages = libraryPage?.pages ?? 1;
+    const activePaper = hoveredPaper ? libraryItems.find(p => p.id === hoveredPaper.id) : null;
     const activePaperSummary = activePaper?.summary || 'No summary available';
 
     // Dynamic Border Class based on position
@@ -268,18 +304,22 @@ export const SidebarLeft: React.FC<SidebarLeftProps> = ({
 
                                     {/* Context Selector Header */}
                                     <div className="flex items-center justify-between px-1 pt-2 text-gray-500">
-                                        <span className="font-bold text-[10px] uppercase tracking-wider">Papers ({projectPapers.length})</span>
+                                        <span className="font-bold text-[10px] uppercase tracking-wider">Papers ({totalPapers})</span>
                                         {selectedContextIds.size > 0 && <span className="text-[10px] bg-indigo-100 text-indigo-700 px-1.5 py-0.5 rounded-full font-bold">{selectedContextIds.size} Active</span>}
                                     </div>
 
-                                    {projectPapers.length === 0 ? (
+                                    {isLibraryLoading ? (
+                                        <div className="border border-gray-200 rounded-xl p-4 text-center mt-2 text-xs text-gray-500">
+                                            Loading library...
+                                        </div>
+                                    ) : libraryItems.length === 0 ? (
                                         <div className="border-2 border-dashed border-gray-200 rounded-xl p-6 text-center mt-2">
                                             <div className="w-8 h-8 bg-gray-100 rounded-full flex items-center justify-center mx-auto mb-2"><PlusCircle className="w-4 h-4 text-gray-400" /></div>
                                             <p className="text-xs text-gray-500 font-medium">Library is empty.</p>
                                         </div>
                                     ) : (
                                         <div className="space-y-2">
-                                            {projectPapers.map(paper => {
+                                            {libraryItems.map(paper => {
                                                 const isSelected = selectedContextIds.has(paper.id);
                                                 return (
                                                     <div
@@ -306,6 +346,26 @@ export const SidebarLeft: React.FC<SidebarLeftProps> = ({
                                                     </div>
                                                 );
                                             })}
+                                        </div>
+                                    )}
+
+                                    {totalPages > 1 && (
+                                        <div className="flex items-center justify-between pt-3 text-[10px] text-gray-500">
+                                            <button
+                                                onClick={() => setLibraryPageIndex(prev => Math.max(1, prev - 1))}
+                                                disabled={libraryPageIndex <= 1}
+                                                className="px-2 py-1 rounded border border-gray-200 disabled:opacity-50"
+                                            >
+                                                Prev
+                                            </button>
+                                            <span className="font-semibold">Page {libraryPageIndex} of {totalPages}</span>
+                                            <button
+                                                onClick={() => setLibraryPageIndex(prev => Math.min(totalPages, prev + 1))}
+                                                disabled={libraryPageIndex >= totalPages}
+                                                className="px-2 py-1 rounded border border-gray-200 disabled:opacity-50"
+                                            >
+                                                Next
+                                            </button>
                                         </div>
                                     )}
                                 </div>
