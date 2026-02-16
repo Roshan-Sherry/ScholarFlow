@@ -4,7 +4,7 @@ This module ensures ALL responses are grounded in actual found papers,
 with proper citations and no hallucination.
 """
 
-from typing import List, Dict, Optional
+from typing import List, Dict, Optional, AsyncIterator
 from dataclasses import dataclass
 import logging
 
@@ -118,8 +118,8 @@ def format_citations_reference(citations: List[SourcedCitation]) -> str:
 
 
 # RAG-Grounded Prompt Templates
-RAG_RESEARCH_PROMPT = """You are ScholarMate, a collaborative research co-author (PhD level).
-We are working together on a research project. Your goal is to help me synthesize findings from our library.
+RAG_RESEARCH_PROMPT = """You are ScholarMate, a research co-author (PhD level).
+We are working together on a research project. Your goal is to help me synthesize findings from our library into a coherent discussion.
 
 ## User Question
 {query}
@@ -131,18 +131,18 @@ We are working together on a research project. Your goal is to help me synthesiz
 {research_context}
 
 ## Instructions
-1. Engage as a knowledgeable peer. Use "We found...", "Our sources suggest...", or "I recommend we look at..."
-2. Synthesize answers from the provided papers. Do not just list facts; build an argument.
-3. Use citations like [1], [2] to reference specific papers. 
-4. If our current papers don't cover the topic, suggest what kind of sources we should look for next.
-5. Identify connections or contradictions between the papers.
+1. **Adopt a Co-Author Persona**: Speak as a peer. Use "We found...", "Our sources suggest...", "It appears that...", or "We should consider...". Avoid robotic phrases like "The provided text says".
+2. **Synthesize, Don't List**: We are writing a paper, not a list of facts. Build an argument based on the evidence.
+3. **Cite Everything**: Use [1], [2] to reference specific papers.
+4. **Be Critical**: Explicitly highlight contradictions or gaps in *our* current sources. If the papers don't cover the topic, say "Our current sources don't address this, but we might look for..."
+5. **Suggest Next Steps**: If appropriate, recommend what we should investigate next.
 
 ## Response Format
-- **Direct Answer**: A clear, synthesized answer to the question.
+- **Discussion**: A clear, synthesized answer or argument.
 - **Detailed Analysis**: Evidence-based discussion citing specific claims [1].
 - **References**: List the papers used at the end.
 
-IMPORTANT: Maintain high academic rigor. No hallucination.
+IMPORTANT: Maintain high academic rigor. No hallucination. Write as if drafting a section of our paper.
 """
 
 
@@ -228,6 +228,80 @@ async def generate_grounded_response(
     
     return {
         "response": full_response,
+        "citations": citations,
+        "papers_used": papers_used,
+        "total_papers_found": len(papers)
+    }
+
+
+async def stream_grounded_response(
+    query: str,
+    papers: List[Dict],
+    ai_client,
+    prompt_type: str = "research",
+    research_context: Optional[str] = None
+) -> AsyncIterator[Dict]:
+    """
+    Stream a response grounded in the provided papers token-by-token.
+    
+    Yields dicts with:
+        - type: "chunk" | "metadata"
+        - content: text chunk (for type="chunk")
+        - citations: list (for type="metadata")
+        - papers_used: list (for type="metadata")
+    """
+    # Format papers into context
+    paper_context, citations = format_paper_context(papers, query)
+    
+    # Select prompt template
+    if prompt_type == "summary":
+        prompt = RAG_SUMMARY_PROMPT.format(query=query, paper_context=paper_context)
+    else:
+        prompt = RAG_RESEARCH_PROMPT.format(
+            query=query, 
+            paper_context=paper_context,
+            research_context=research_context or "No relevant past context found."
+        )
+    
+    # Stream response chunks
+    full_response = ""
+    try:
+        async for chunk in ai_client.generate_text_stream(prompt, temperature=0.3):
+            full_response += chunk
+            yield {
+                "type": "chunk",
+                "content": chunk
+            }
+    except Exception as e:
+        logger.error(f"Streaming failed: {e}")
+        yield {
+            "type": "chunk",
+            "content": "I apologize, but I encountered an error while generating the response."
+        }
+        return
+    
+    # Append reference list at the end
+    references = format_citations_reference(citations)
+    if references:
+        yield {
+            "type": "chunk",
+            "content": references
+        }
+    
+    # Extract which papers were actually used
+    papers_used = []
+    for c in citations:
+        if f"[{c.index}]" in full_response:
+            papers_used.append({
+                "title": c.title,
+                "authors": c.authors,
+                "source": c.source,
+                "url": c.url
+            })
+    
+    # Send metadata at the end
+    yield {
+        "type": "metadata",
         "citations": citations,
         "papers_used": papers_used,
         "total_papers_found": len(papers)

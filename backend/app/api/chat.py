@@ -95,6 +95,14 @@ async def stream_workflow(
                             }
                             yield f"data: {json.dumps(found_event)}\n\n"
                             logger.info(f"Sent 'found' event with {len(formatted_papers)} papers")
+                            
+                            # NEW: Emit "analyzing" status for avatar narration
+                            status_event = {
+                                "type": "status",
+                                "phase": "analyzing",
+                                "message": "Let me analyze these papers and extract the key insights..."
+                            }
+                            yield f"data: {json.dumps(status_event)}\n\n"
 
                     # Stream each log entry
                     for log in logs:
@@ -110,15 +118,28 @@ async def stream_workflow(
                     # If draft is being generated, stream content
                     current_draft = state_update.get("current_draft", {})
                     if current_draft and current_draft.get("content"):
+                        # NEW: Emit "synthesizing" status before answer
+                        synth_event = {
+                            "type": "status",
+                            "phase": "synthesizing",
+                            "message": "Based on what I found, here's the synthesis..."
+                        }
+                        yield f"data: {json.dumps(synth_event)}\n\n"
+                        
                         content = current_draft["content"]
                         final_response = content # Update final response
                         logger.info(f"Captured draft content: {len(content)} chars")
                         
-                        text_event = {
-                            "type": "text",
-                            "data": content
-                        }
-                        yield f"data: {json.dumps(text_event)}\n\n"
+                        # Stream word-by-word for ChatGPT-like experience
+                        words = content.split()
+                        for i, word in enumerate(words):
+                            chunk = word if i == 0 else f" {word}"
+                            text_event = {
+                                "type": "text_chunk",
+                                "data": chunk
+                            }
+                            yield f"data: {json.dumps(text_event)}\n\n"
+                            await asyncio.sleep(0.005)  # 5ms for faster streaming
                     
                     # NEW: Capture synthesis summary (from Synthesis Node)
                     if state_update.get("synthesis_summary"):
@@ -126,11 +147,16 @@ async def stream_workflow(
                         final_response = content
                         logger.info(f"Captured synthesis: {len(content)} chars")
                         
-                        text_event = {
-                            "type": "text",
-                            "data": content
-                        }
-                        yield f"data: {json.dumps(text_event)}\n\n"
+                        # Stream word-by-word
+                        words = content.split()
+                        for i, word in enumerate(words):
+                            chunk = word if i == 0 else f" {word}"
+                            text_event = {
+                                "type": "text_chunk",
+                                "data": chunk
+                            }
+                            yield f"data: {json.dumps(text_event)}\n\n"
+                            await asyncio.sleep(0.03)
                         
                     # NEW: Capture proactive suggestions
                     if state_update.get("next_actions"):

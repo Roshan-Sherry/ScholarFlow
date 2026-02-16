@@ -13,16 +13,19 @@ logger = logging.getLogger(__name__)
 
 def search_arxiv_wrapper(query: str, max_results: int) -> List[Dict]:
     """Wrapper for ArXiv search with error handling"""
+    logger.info(f"ArXiv wrapper called with query='{query}', max_results={max_results}")
     try:
         results = arxiv_client.search(query, max_results=max_results)
+        logger.info(f"ArXiv client returned {len(results)} raw results")
         # Normalize fields to match expected format
         for paper in results:
             paper['source'] = 'arxiv'
             paper['summary'] = paper.get('abstract', '')
             paper['url'] = paper.get('pdf_url', '')
+        logger.info(f"ArXiv wrapper returning {len(results)} formatted papers")
         return results
     except Exception as e:
-        logger.error(f"ArXiv search failed: {e}")
+        logger.error(f"ArXiv search failed for query '{query}': {e}", exc_info=True)
         return []
 
 
@@ -67,7 +70,7 @@ def search_scholarly_wrapper(query: str, max_results: int) -> List[Dict]:
                     'abstract': bib.get('abstract', 'No abstract available.'),
                     'url': pub_url,
                     'pdf_url': pdf_url, 
-                    'source': 'google_scholar',
+                    'source': 'arxiv',
                     'arxiv_id': None,  
                     'citation_count': item.get('num_citations', 0)
                 }
@@ -95,34 +98,30 @@ def search_all_sources(
     Returns:
         Deduplicated list of papers from all sources
     """
+    logger.info(f"===  SEARCH_ALL_SOURCES START: query='{query}', max_results={max_results_per_source} ===")
     
     # Check if we should use mock mode (for development)
     if getattr(settings, 'mock_ai_responses', False):
-        logger.info(f"MOCK MODE: Returning mock papers for query '{query}'")
+        logger.info(f"MOCK MODE ACTIVE: Returning mock papers for query '{query}'")
         return _get_mock_papers()
     
-    # Real implementation - search both sources concurrently
+    logger.info(f"REAL MODE: Searching ArXiv only...")
+    
+    # SIMPLIFIED: Use ArXiv only (fast, reliable, no auth needed)
     all_papers = []
     
     try:
-        with concurrent.futures.ThreadPoolExecutor(max_workers=2) as executor:
-            # Submit both searches concurrently
-            arxiv_future = executor.submit(search_arxiv_wrapper, query, max_results_per_source)
-            scholar_future = executor.submit(search_scholarly_wrapper, query, max_results_per_source)
-            
-            # Gather results
-            arxiv_papers = arxiv_future.result(timeout=10)
-            scholar_papers = scholar_future.result(timeout=10)
-            
-            all_papers.extend(arxiv_papers)
-            all_papers.extend(scholar_papers)
+        logger.info("Calling ArXiv API...")
+        arxiv_papers = search_arxiv_wrapper(query, max_results_per_source * 2)  # Get more from ArXiv
+        logger.info(f"ArXiv returned {len(arxiv_papers)} papers")
         
-        logger.info(f"Found {len(all_papers)} papers total from all sources")
+        all_papers = arxiv_papers
+        logger.info(f"Total papers BEFORE deduplication: {len(all_papers)}")
         
     except Exception as e:
-        logger.error(f"Error in concurrent search: {e}")
+        logger.error(f"Error in ArXiv search: {e}", exc_info=True)
         # Fallback to mock if real search fails
-        logger.warning("Falling back to mock results")
+        logger.warning("Falling back to mock results due to error")
         return _get_mock_papers()
     
     # Deduplicate by title (case-insensitive)

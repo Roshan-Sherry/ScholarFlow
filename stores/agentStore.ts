@@ -18,6 +18,11 @@ interface AgentStore {
   addAgentLog: (source: AgentLog['source'], message: string, status?: AgentLog['status']) => void;
   setPendingMessage: (message: string | null) => void;
   setIsStreaming: (streaming: boolean) => void;
+  
+  // Avatar Speech
+  avatarMessageToSpeak: string | null;
+  setAvatarMessageToSpeak: (message: string | null) => void;
+
   clearLogs: () => void;
   reset: () => void;
 }
@@ -51,6 +56,10 @@ export const useAgentStore = create<AgentStore>((set) => ({
   setPendingMessage: (message) => set({ pendingMessage: message }),
 
   setIsStreaming: (streaming) => set({ isStreaming: streaming }),
+
+  // Avatar Speech
+  avatarMessageToSpeak: null,
+  setAvatarMessageToSpeak: (message) => set({ avatarMessageToSpeak: message }),
 
   clearLogs: () => set({ agentLogs: [] }),
 

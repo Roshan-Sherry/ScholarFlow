@@ -1,4 +1,3 @@
-"""arXiv API client for paper search using arxiv library"""
 
 import arxiv
 from typing import List, Dict, Optional
@@ -31,36 +30,139 @@ class ArxivClient:
         Returns:
             List of paper dictionaries with metadata
         """
+        """
+        Search arXiv for papers matching the query
+        
+        Args:
+            query: Search query (can use arXiv query syntax)
+            max_results: Maximum number of results to return
+            sort_by: Sort criterion (Relevance, LastUpdatedDate, SubmittedDate)
+        
+        Returns:
+            List of paper dictionaries with metadata
+        """
+        logger.info(f"=== ArXiv Client Search START ===")
+        logger.info(f"Query: '{query}', Max Results: {max_results}")
+        
+        import urllib.request
+        import urllib.parse
+        import xml.etree.ElementTree as ET
+        
         try:
-            search = arxiv.Search(
-                query=query,
-                max_results=max_results,
-                sort_by=sort_by
-            )
+            # Construct API URL
+            base_url = 'http://export.arxiv.org/api/query?'
+            
+            # Map sort criteria if possible, or default to relevance
+            sort_param = 'relevance'
+            if sort_by == arxiv.SortCriterion.LastUpdatedDate:
+                sort_param = 'lastUpdatedDate'
+            elif sort_by == arxiv.SortCriterion.SubmittedDate:
+                sort_param = 'submittedDate'
+                
+            params = {
+                'search_query': query,
+                'start': 0,
+                'max_results': max_results,
+                'sortBy': sort_param,
+                'sortOrder': 'descending'
+            }
+            
+            query_string = urllib.parse.urlencode(params)
+            url = base_url + query_string
+            
+            logger.info(f"Calling ArXiv API: {url}")
+            
+            # Use urllib with timeout to prevent hanging
+            with urllib.request.urlopen(url, timeout=10) as response:
+                data = response.read()
+                
+            logger.info(f"Received {len(data)} bytes from ArXiv")
+            
+            # Parse XML
+            root = ET.fromstring(data)
+            
+            # ArXiv API uses Atom namespace
+            ns = {'atom': 'http://www.w3.org/2005/Atom', 'arxiv': 'http://arxiv.org/schemas/atom'}
             
             results = []
-            for paper in self.client.results(search):
-                results.append({
-                    'arxiv_id': paper.entry_id.split('/')[-1],  # Extract ID from URL
-                    'title': paper.title,
-                    'authors': [author.name for author in paper.authors],
-                    'abstract': paper.summary,
-                    'year': paper.published.year if paper.published else None,
-                    'published_date': paper.published.isoformat() if paper.published else None,
-                    'updated_date': paper.updated.isoformat() if paper.updated else None,
-                    'pdf_url': paper.pdf_url,
-                    'primary_category': paper.primary_category,
-                    'categories': paper.categories,
-                    'doi': paper.doi,
-                    'journal_ref': paper.journal_ref,
-                    'comment': paper.comment
-                })
+            count = 0
             
-            logger.info(f"Found {len(results)} papers for query: {query}")
+            for entry in root.findall('atom:entry', ns):
+                count += 1
+                try:
+                    # Extract fields
+                    id_url = entry.find('atom:id', ns).text
+                    arxiv_id = id_url.split('/')[-1]
+                    
+                    title = entry.find('atom:title', ns).text.strip()
+                    title = ' '.join(title.split()) # Normalize whitespace
+                    
+                    summary = entry.find('atom:summary', ns).text.strip()
+                    
+                    authors = []
+                    for author in entry.findall('atom:author', ns):
+                        name = author.find('atom:name', ns).text
+                        authors.append(name)
+                        
+                    published = entry.find('atom:published', ns).text
+                    updated = entry.find('atom:updated', ns).text
+                    
+                    # Links
+                    pdf_url = None
+                    doi = None
+                    journal_ref = None
+                    
+                    for link in entry.findall('atom:link', ns):
+                        rel = link.get('rel')
+                        href = link.get('href')
+                        if rel == 'related' and link.get('title') == 'pdf':
+                            pdf_url = href
+                        elif rel == 'alternate' and link.get('type') == 'text/html':
+                             pass # Main page
+                             
+                    # Optional fields
+                    doi_elem = entry.find('arxiv:doi', ns)
+                    if doi_elem is not None:
+                        doi = doi_elem.text
+                        
+                    journal_elem = entry.find('arxiv:journal_ref', ns)
+                    if journal_elem is not None:
+                        journal_ref = journal_elem.text
+                        
+                    comment_elem = entry.find('arxiv:comment', ns)
+                    comment = comment_elem.text if comment_elem is not None else None
+                    
+                    category = entry.find('arxiv:primary_category', ns)
+                    primary_category = category.get('term') if category is not None else None
+                    
+                    categories = [c.get('term') for c in entry.findall('atom:category', ns)]
+
+                    logger.info(f"Processing paper {count}: {title[:60]}...")
+                    
+                    results.append({
+                        'arxiv_id': arxiv_id,
+                        'title': title,
+                        'authors': authors,
+                        'abstract': summary,
+                        'year': int(published[:4]) if published else None,
+                        'published_date': published,
+                        'updated_date': updated,
+                        'pdf_url': pdf_url or id_url.replace('abs', 'pdf'),
+                        'primary_category': primary_category,
+                        'categories': categories,
+                        'doi': doi,
+                        'journal_ref': journal_ref,
+                        'comment': comment
+                    })
+                except Exception as parse_err:
+                     logger.warning(f"Error parsing paper entry {count}: {parse_err}")
+                     continue
+            
+            logger.info(f"=== ArXiv Client Search COMPLETE: Found {len(results)} papers ===")
             return results
             
         except Exception as e:
-            logger.error(f"Error searching arXiv: {e}")
+            logger.error(f"Error searching arXiv for query '{query}': {e}", exc_info=True)
             return []
     
     def search_by_id(self, arxiv_id: str) -> Optional[Dict]:

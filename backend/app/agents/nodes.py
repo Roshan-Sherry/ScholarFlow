@@ -106,23 +106,32 @@ Format:
 
 async def router_node(state: ResearchState) -> Dict:
     """Classify user intent and route to appropriate subgraph"""
+    import logging
+    logger = logging.getLogger(__name__)
     
     query = state["query"]
-    memory = get_memory_agent()
+    logger.info(f"Router analyzing query: '{query[:60]}...'")
     
-    # Add interaction to memory
-    await memory.add_interaction("user", query)
+    # FAST keyword-based classification (no LLM needed)
+    q_lower = query.lower()
+    
+    if "draft" in q_lower or "write" in q_lower or "outline" in q_lower or "compose" in q_lower:
+        intent = "DRAFT"
+    elif "analyze" in q_lower and ("image" in q_lower or "figure" in q_lower or "data" in q_lower or "lab" in q_lower):
+        intent = "ANALYZE"
+    else:
+        # Default to SEARCH for all research/knowledge queries
+        intent = "SEARCH"
+    
+    logger.info(f"Router classified intent as: {intent}")
     
     # Log step
     log_entry = {
         "step": "router",
         "source": "Router",
-        "message": f"Analyzing intent for: '{query[:50]}...'",
-        "status": "processing"
+        "message": f"✓ Classified as {intent} intent",
+        "status": "completed"
     }
-    
-    # Classify intent using AI
-    intent = await ai_client.classify_intent(query)
     
     # Log agent activity
     agent_log = {
@@ -135,15 +144,7 @@ async def router_node(state: ResearchState) -> Dict:
     return {
         "intent": intent,
         "agent_history": [agent_log],
-        "logs": [
-            log_entry,
-            {
-                "step": "router",
-                "source": "Router",
-                "message": f"✓ Intent classified as: {intent}",
-                "status": "completed"
-            }
-        ]
+        "logs": [log_entry]
     }
 
 
@@ -151,12 +152,15 @@ async def router_node(state: ResearchState) -> Dict:
 
 async def search_node(state: ResearchState) -> Dict:
     """Search external APIs for papers with query analysis"""
+    logger.info("=== ENTERING SEARCH NODE ===")
     
     from app.services.query_analyzer import query_analyzer
     from app.services.paper_search import search_all_sources
     
     query = state.get("refined_query") or state["query"]
     iteration = state.get("search_iteration", 0)
+    
+    logger.info(f"Search Node - Query: '{query}', Iteration: {iteration}")
     
     # Log step
     log_entry = {
@@ -168,14 +172,24 @@ async def search_node(state: ResearchState) -> Dict:
     
     try:
         # Step 1: Analyze query
-        analysis = await query_analyzer.analyze_query(query)
-        optimized_query = analysis.get("search_query", query)
+        try:
+            analysis = await query_analyzer.analyze_query(query)
+            optimized_query = analysis.get("search_query", query)
+            if not optimized_query or not optimized_query.strip():
+                logger.warning("Optimized query was empty, falling back to original")
+                optimized_query = query
+        except Exception as qa_err:
+            logger.error(f"Query analysis failed: {qa_err}")
+            optimized_query = query
+            analysis = {"thought": "Query analysis failed, using original"}
+            
+        logger.info(f"=== EXECUTING SEARCH WITH QUERY: '{optimized_query}' ===")
         
         # Log query analysis
         thought_log = {
             "step": "search",
             "source": "QueryAnalyzer",
-            "message": f"💡 {analysis.get('thought', 'Query analyzed')}",
+            "message": f"💡 Analyzed: {analysis.get('thought', 'Using raw query')}",
             "status": "completed"
         }
         
@@ -726,30 +740,31 @@ async def rag_response_node(state: ResearchState) -> Dict:
     library_papers_info = []
     
     # ===== STEP 0: RETRIEVE UNIFIED PROJECT MEMORY (Chat History) =====
+    # TEMPORARILY DISABLED: Vector store memory retrieval was causing bottleneck
     memory_context = []
-    try:
-        # Search for past relevant chat interactions (Unified Memory)
-        chat_results = await vector_store.search_similar(
-            project_id=project_id,
-            query=query,
-            top_k=3,  # Get top 3 conversaton snippets
-            include_metadata=True
-        )
-        
-        for res in chat_results:
-            # Only include if it's a chat log
-            if res.get("type") == "chat":
-                 memory_context.append(f"Previously discussed: {res.get('text')}")
-                 
-        if memory_context:
-            logs.append({
-                "step": "rag_response",
-                "source": "UnifiedMemory",
-                "message": f"🧠 Recalled {len(memory_context)} relevant past interactions",
-                "status": "completed"
-            })
-    except Exception as mem_err:
-        print(f"Memory retrieval warning: {mem_err}")
+    # try:
+    #     # Search for past relevant chat interactions (Unified Memory)
+    #     chat_results = await vector_store.search_similar(
+    #         project_id=project_id,
+    #         query=query,
+    #         top_k=3,  # Get top 3 conversaton snippets
+    #         include_metadata=True
+    #     )
+    #     
+    #     for res in chat_results:
+    #         # Only include if it's a chat log
+    #         if res.get("type") == "chat":
+    #              memory_context.append(f"Previously discussed: {res.get('text')}")
+    #              
+    #     if memory_context:
+    #         logs.append({
+    #             "step": "rag_response",
+    #             "source": "UnifiedMemory",
+    #             "message": f"🧠 Recalled {len(memory_context)} relevant past interactions",
+    #             "status": "completed"
+    #         })
+    # except Exception as mem_err:
+    #     print(f"Memory retrieval warning: {mem_err}")
 
     # ===== STEP 1: CHECK CONTEXT SHELF FIRST =====
     if selected_paper_ids:
@@ -930,12 +945,27 @@ Would you like me to try a different search?""",
         }
         
     except Exception as e:
+        error_msg = str(e)
+        logger_msg = f"✗ Response generation failed: {error_msg}"
+        status = "error"
+        
+        # Friendly error for known limits
+        if "Concurrent session limit" in error_msg or "429" in error_msg:
+             error_msg = "I'm currently handling too many requests (Concurrent Session Limit). Please try again in a moment."
+             logger_msg = "⚠ Concurrent session limit hit"
+             status = "warning"
+             
         return {
-            "error": str(e),
+            "error": error_msg,
+            "current_draft": {
+                "section": "Response",
+                "content": f"**System Notice:** {error_msg}\n\nI found relevant papers (see left panel), but could not generate a summary right now.",
+                "status": "error"
+            },
             "logs": logs + [{
                 "step": "rag_response",
                 "source": "ResearchAssistant",
-                "message": f"✗ Response generation failed: {str(e)}",
-                "status": "error"
+                "message": logger_msg,
+                "status": status
             }]
         }

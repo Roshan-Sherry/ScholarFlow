@@ -349,7 +349,10 @@ Consider: What's the primary intent? What information is needed? What's the opti
 
 Return: Primary agent, reasoning, and any secondary agents needed."""
 
-        routing = await ai_client.generate_text(prompt, temperature=0.3)
+        # OPTIMIZATION: The following LLM call takes ~10s and is unused because we use keyword routing below.
+        # Commenting out to fix performance bottleneck.
+        # routing = await ai_client.generate_text(prompt, temperature=0.3)
+        routing = "Keyword-based routing applied for speed."
         
         # Parse routing decision (simplified)
         if "search" in query.lower() or "find" in query.lower():

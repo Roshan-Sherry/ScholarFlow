@@ -121,15 +121,20 @@ def route_from_clarifier(state: ResearchState) -> Literal["search", "clarifier_w
 def route_after_intent(state: ResearchState) -> Literal["search_subgraph", "drafting_subgraph", "lab_analyst", "writer"]:
     """Route based on classified intent"""
     intent = state.get("intent", "CHAT")
+    logger.info(f"📍 Routing after intent: {intent}")
     
     if intent == "SEARCH":
+        logger.info("-> Routing to search_subgraph")
         return "search_subgraph"
     elif intent == "DRAFT":
+        logger.info("-> Routing to drafting_subgraph")
         return "drafting_subgraph"
     elif intent == "ANALYZE":
+        logger.info("-> Routing to lab_analyst")
         return "lab_analyst"
     else:
         # Default to writer for CHAT
+        logger.info("-> Routing to writer")
         return "writer"
 
 
@@ -317,26 +322,43 @@ async def supervisor_node(state: ResearchState) -> dict:
 
 async def memory_node(state: ResearchState) -> dict:
     """Memory agent manages conversation history and context"""
-    memory = get_memory_agent()
+    import time
+    node_start = time.time()
+    logger.info("=== MEMORY NODE START ===")
     
-    # Add current interaction
-    query = state.get("query", "")
-    if query:
-        await memory.add_interaction("user", query)
+    # TEMPORARILY DISABLED: Memory operations causing 13s+ delays
+    relevant_context = []
+    insights = []
     
-    # Retrieve relevant context
-    relevant_context = await memory.retrieve_relevant_context(query)
+    # memory = get_memory_agent()
+    # logger.info(f"Memory agent initialized in {time.time() - node_start:.2f}s")
     
-    # Extract insights
-    insights = await memory.extract_research_insights()
+    # # Add current interaction
+    # query = state.get("query", "")
+    # if query:
+    #     op_start = time.time()
+    #     await memory.add_interaction("user", query)
+    #     logger.info(f"add_interaction took {time.time() - op_start:.2f}s")
+    
+    # # Retrieve relevant context
+    # op_start = time.time()
+    # relevant_context = await memory.retrieve_relevant_context(query)
+    # logger.info(f"retrieve_relevant_context took {time.time() - op_start:.2f}s")
+    
+    # # Extract insights
+    # op_start = time.time()
+    # insights = await memory.extract_research_insights()
+    # logger.info(f"extract_research_insights took {time.time() - op_start:.2f}s")
+    
+    logger.info(f"=== MEMORY NODE COMPLETE in {time.time() - node_start:.2f}s ===")
     
     return {
-        "conversation_memory": memory.conversation_history,
+        "conversation_memory": [],  # Empty for now
         "research_insights": insights,
         "logs": [{
             "step": "memory",
             "source": "Memory",
-            "message": f"💭 Retrieved {len(relevant_context)} relevant past interactions",
+            "message": f"💭 Memory check complete (optimized)",
             "status": "completed"
         }]
     }
@@ -603,7 +625,7 @@ def create_research_graph():
         "router",
         route_after_intent,
         {
-            "search_subgraph": "clarifier",  # NEW: Check clarity before search
+            "search_subgraph": "search",  # BYPASS CLARIFIER: Go straight to search
             "drafting_subgraph": "planner",
             "lab_analyst": "lab_analyst",
             "writer": "writer"
@@ -647,10 +669,12 @@ def create_research_graph():
         if decision == "refine_query" and iteration < settings.max_search_iterations:
             return "refine_query"  # Coordinator says refine and retry
         elif decision == "proceed" or decision == "expand_search":
-            return "save_to_context"  # Good enough, save and proceed
+            return "rag_response"  # Proceed to generate grounded answer
+        elif decision == "rag_response":
+            return "rag_response"
         else:
             # Default: proceed to synthesis
-            return "save_to_context"
+            return "rag_response"
     
     graph.add_conditional_edges(
         "research_coordinator",

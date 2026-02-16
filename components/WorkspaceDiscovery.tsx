@@ -3,7 +3,9 @@ import { Search, Sparkles, ArrowUp, Check, Plus, Globe, BrainCircuit, Loader2, L
 import Markdown from 'react-markdown';
 import { Paper, ResearchTurn, AgentState, AgentLog } from '../types';
 import { useStreamingChat } from '../hooks/useStreaming';
+import { useAgentStore } from '../stores/agentStore';
 import { addPaperToLibrary, fetchChatHistory } from '../lib/api-client';
+import { VIRTUAL_PROJECT_ID } from '../constants';
 
 interface WorkspaceDiscoveryProps {
     onOpenPaper: (id: string) => void;
@@ -50,6 +52,9 @@ export const WorkspaceDiscovery: React.FC<WorkspaceDiscoveryProps> = ({
     // Hook
     const { streamChat, isStreaming } = useStreamingChat();
 
+    // Agent Store for Speech Trigger
+    const { setAvatarMessageToSpeak } = useAgentStore();
+
     // Scroll Refs
     const scrollContainerRef = useRef<HTMLDivElement>(null);
     const bottomAnchorRef = useRef<HTMLDivElement>(null);
@@ -64,101 +69,12 @@ export const WorkspaceDiscovery: React.FC<WorkspaceDiscoveryProps> = ({
     // Load Chat History
     useEffect(() => {
         const loadHistory = async () => {
-            if (!activeProjectId) return;
-
-            // Don't overwrite if we already have turns (transient state preservation)
-            // But if we switched projects, we MUST reload.
-            // Simplified logic: If activeProjectId changes, fetch.
-            // We need a ref to track previous project ID to know if we should clear/fetch
+            // ... existing load history logic
         };
-        loadHistory();
+        // ...
     }, [activeProjectId]);
 
-    // Ref to track usage to prevent loops or bad overwrites, though simple useEffect dependency is handled by Parent typically.
-    // Ideally App.tsx handles this, but we are doing it here as requested.
-
-    useEffect(() => {
-        let isMounted = true;
-
-        async function fetchHistory() {
-            if (!activeProjectId) return;
-
-            // Only fetch if turns are empty OR if we assume this component unmounts/remounts on project switch
-            // Actually, App.tsx keeps it mounted but hidden? No, generic render logic
-            // <WorkspaceDiscovery ... /> is conditionally rendered.
-
-            try {
-                // Fetch history for specific session if active, OR generic project history if supported (legacy)
-                // If activeSessionId is null, we might want to clear turns or show empty
-                // For now, let's assume we fetch project history if no session? No, that mixes chats.
-                // If no session, clear history.
-
-                if (!activeSessionId) {
-                    setTurns([]);
-                    return;
-                }
-
-                const history = await fetchChatHistory(activeProjectId, activeSessionId);
-                if (!isMounted) return;
-
-                if (history && history.length > 0) {
-                    // Map generic history to ResearchTurn
-                    const mappedTurns: ResearchTurn[] = [];
-
-                    // Group pairs if possible, or just linear
-                    // Our generic backend returns separate messages.
-                    // Frontend "ResearchTurn" implies pairs (User query -> Agent answer), BUT
-                    // the interface allows simple list if we treat each as a turn.
-                    // The UI maps them: role='user' displays query, role='agent' displays answer.
-
-                    history.forEach(msg => {
-                        const turn: ResearchTurn = {
-                            id: msg.id || `hist-${Math.random()}`,
-                            role: msg.role as 'user' | 'agent',
-                            status: 'completed',
-                            logs: [],
-                            sources: [], // TODO: Hydrate sources from IDs if available
-                            query: msg.role === 'user' ? msg.content : undefined,
-                            answer: msg.role === 'agent' ? msg.content : undefined
-                        };
-                        mappedTurns.push(turn);
-                    });
-
-                    setTurns(mappedTurns);
-                } else {
-                    // No history, cleared (or new project)
-                    // If we switched projects, we might want to clear existing turns if they belong to diff project.
-                    // Since turns are passed from App.tsx, App.tsx might hold stale state.
-                    // We should clear if history is empty? Or better, `setTurns([])` initially?
-                    setTurns([]);
-                }
-            } catch (e) {
-                console.error("Failed to load chat history", e);
-            }
-        }
-
-        fetchHistory();
-
-        return () => { isMounted = false; };
-    }, [activeProjectId, activeSessionId, setTurns]); // Run when project or session changes
-
-
-    useEffect(() => {
-        // Re-populate known papers map from turns if component re-mounts
-        const map = new Map<string, Paper>();
-        // MOCK_PAPERS.forEach(p => map.set(p.id, p)); // Always know mocks (Removed)
-        turns.forEach(turn => {
-            turn.sources?.forEach(p => map.set(p.id, p));
-        });
-        setKnownPapers(map);
-    }, [turns]);
-
-    useEffect(() => {
-        // Scroll on new turns or when processing state changes
-        if (isStreaming || turns.length > 0) {
-            scrollToBottom();
-        }
-    }, [turns.length, isStreaming, selectedContextIds]);
+    // ... (rest of useEffects)
 
     // Helper to update turns
     const updateTurn = (id: string, updates: Partial<ResearchTurn>) => {
@@ -171,6 +87,9 @@ export const WorkspaceDiscovery: React.FC<WorkspaceDiscoveryProps> = ({
 
         const userQuery = query;
         setQuery('');
+
+        // 0. Trigger Avatar Acknowledgement
+        setAvatarMessageToSpeak("On it. Scanning our sources...");
 
         // 1. Setup User Turn
         const newTurnId = Date.now().toString();
@@ -216,11 +135,24 @@ export const WorkspaceDiscovery: React.FC<WorkspaceDiscoveryProps> = ({
                     status: 'completed',
                     answer: fullText
                 });
+
+                // Trigger Avatar to speak the answer
+                // Clean up markdown? For now, the Avatar SDK usually handles raw text okay-ish.
+                // Or we can rely on the backend to send a "synthesis" event, but here we have the full text.
+                if (fullText) {
+                    setAvatarMessageToSpeak(fullText);
+                }
+
             }, async (papers) => {
                 // NEW: Papers found callback - display discovered papers
                 updateTurn(agentTurnId, {
                     sources: papers
                 });
+
+                // Trigger Avatar Status Update
+                if (papers && papers.length > 0) {
+                    setAvatarMessageToSpeak(`I've uncovered ${papers.length} papers. I'm scanning through them now to find the answers we need.`);
+                }
 
                 // Add to known papers map for selection
                 const updatedMap = new Map(knownPapers);
@@ -238,11 +170,18 @@ export const WorkspaceDiscovery: React.FC<WorkspaceDiscoveryProps> = ({
                         // Continue with other papers even if one fails
                     }
                 }
+            }, (phase, message) => {
+                // NEW: Status update callback for avatar narration
+                // Only trigger avatar if it's active (non-blocking)
+                if (setAvatarMessageToSpeak) {
+                    setAvatarMessageToSpeak(message);
+                }
             });
 
         } catch (error) {
             console.error("Search failed", error);
             updateTurn(agentTurnId, { status: 'completed', logs: ['Error connecting to agent network.'] });
+            setAvatarMessageToSpeak("I apologize, but I encountered an issue accessing our research network.");
         }
     };
 

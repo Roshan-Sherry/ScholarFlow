@@ -19,7 +19,8 @@ export function useStreamingChat() {
       payload: ChatStreamPayload,
       onTextChunk?: (text: string) => void,
       onComplete?: (fullText: string) => void,
-      onPapersFound?: (papers: any[]) => void
+      onPapersFound?: (papers: any[]) => void,
+      onStatusUpdate?: (phase: string, message: string) => void  // NEW: For avatar narration
     ) => {
       setIsStreaming(true);
       setStoreStreaming(true);
@@ -53,7 +54,19 @@ export function useStreamingChat() {
             if (onTextChunk) {
               onTextChunk(event.data);
             }
-          } else if (event.type === 'complete') {
+          } else if (event.type === 'text_chunk' && event.data) {
+            accumulatedText += event.data;
+            if (onTextChunk) onTextChunk(accumulatedText);
+          } else if (event.type === 'status' && event.phase && event.message) {
+             // NEW: Handle status events for avatar narration (analyzing, synthesizing)
+             // This is optional - if no handler provided, just log it
+             addAgentLog('Avatar', event.message, 'info');
+             // @ts-ignore - onStatusUpdate is optional callback
+             if (onStatusUpdate) {
+               // @ts-ignore
+               onStatusUpdate(event.phase, event.message);
+             }
+           } else if (event.type === 'complete') {
             setAgentState(AgentState.IDLE);
             
             // Check for structured answer from Mock Backend
