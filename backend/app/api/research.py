@@ -228,32 +228,23 @@ async def stream_research_search(request: ResearchQuestionRequest):
             yield f"data: {json.dumps({'type': 'generating', 'message': 'Generating answer...'})}\n\n"
             
             # Extract context
-            # context_chunks = [p.get('summary', '') for p in ranked_papers[:5]]
-            # paper_metadata = ... (omitted for brevity)
+            context_chunks = [p.get('summary', '') for p in ranked_papers[:5]]
             
-            # MOCK GENERATION
-            await asyncio.sleep(1) # Small delay for effect
-            answer = {
-                "summary": "Chain-of-Thought (CoT) prompting significantly improves the reasoning capabilities of Large Language Models (LLMs) by encouraging them to generate intermediate reasoning steps before arriving at a final answer. This mimics human problem-solving and is particularly effective for complex tasks like arithmetic, common sense reasoning, and symbolic manipulation.",
-                "key_points": [
-                    "CoT enables models to decompose complex problems into intermediate steps.",
-                    "It is an emergent property of model scale, typically appearing in models with 100B+ parameters.",
-                    "CoT serves as a bridge for reasoning, allowing models to 'think' before they speak.",
-                    "Performance gains are substantial on tasks like GSM8K and various reasoning benchmarks."
-                ],
-                "recommended_actions": [
-                    "Experiment with few-shot CoT prompting for complex reasoning tasks.",
-                    "Combine CoT with self-consistency to further improve reliability.",
-                    "Explore zero-shot CoT ('Let's think step by step') for quick improvements."
-                ],
-                "explanation_steps": [
-                    "User provides a prompt with reasoning examples.",
-                    "Model generates a chain of thought following the examples.",
-                    "Model derives the final answer based on the chain of thought."
-                ],
-                "confidence": "high",
-                "notes": "The effectiveness of CoT is highly dependent on the quality of the reasoning demonstrations provided in the prompt."
-            }
+            paper_metadata = []
+            for p in ranked_papers[:5]:
+                paper_metadata.append({
+                    'title': p.get('title'),
+                    'authors': p.get('authors', []),
+                    'year': p.get('year'),
+                    'source': p.get('source', 'Unknown')
+                })
+            
+            # Generate Answer (Real or Mock via AnswerGenerator config)
+            answer = await answer_generator.generate_answer(
+                question=request.question,
+                context_chunks=context_chunks,
+                paper_metadata=paper_metadata
+            )
             
             # Step 5: Complete
             yield f"data: {json.dumps({'type': 'complete', 'answer': answer, 'papers': ranked_papers[:5]})}\n\n"

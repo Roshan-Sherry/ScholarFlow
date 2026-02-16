@@ -14,6 +14,94 @@ from app.services.rag_grounding import generate_grounded_response, format_paper_
 from app.agents.specialists import get_memory_agent, get_citation_agent
 
 
+# ===== CLARIFIER NODE =====
+
+async def clarifier_node(state: ResearchState) -> Dict:
+    """Check query ambiguity and ask clarifying questions if needed"""
+    
+    query = state["query"]
+    clarification_answer = state.get("clarification_answer")
+    
+    # If we already have a clarification answer, refine the query
+    if clarification_answer:
+        refined_query = f"{query} (specifically: {clarification_answer})"
+        return {
+            "query": refined_query,
+            "needs_clarification": False,
+            "logs": [{
+                "step": "clarifier",
+                "source": "Clarifier",
+                "message": f"✓ Query refined based on clarification: {clarification_answer}",
+                "status": "completed"
+            }]
+        }
+    
+    # Analyze query ambiguity
+    log_entry = {
+        "step": "clarifier",
+        "source": "Clarifier",
+        "message": "Analyzing query clarity...",
+        "status": "processing"
+    }
+    
+    # Use AI to detect ambiguity
+    prompt = f"""Analyze this research query for ambiguity on a scale of 0.0 (clear) to 1.0 (ambiguous).
+
+Query: "{query}"
+
+Consider:
+- Is the topic too broad? (e.g., "machine learning" vs "machine learning for medical diagnosis")
+- Are there multiple interpretations? (e.g., "RAG systems" could mean architecture OR applications)
+- Are key constraints missing? (e.g., "neural networks" - what domain? what year range?)
+
+Respond ONLY with a number from 0.0 to 1.0, then on the next line, if ambiguous (>0.7), provide ONE clarifying question.
+
+Format:
+<score>
+<question if needed>
+"""
+    
+    response = await ai_client.generate_text(prompt, temperature=0.3, use_flash=True)
+    lines = response.strip().split('\n')
+    
+    try:
+        score = float(lines[0].strip())
+        score = max(0.0, min(1.0, score))  # Clamp to 0-1
+    except (ValueError, IndexError):
+        score = 0.5  # Default to moderate ambiguity if parsing fails
+    
+    # Extract clarifying question if provided
+    clarifying_question = None
+    if len(lines) > 1 and score > 0.7:
+        clarifying_question = '\n'.join(lines[1:]).strip()
+    
+    # If highly ambiguous, request clarification
+    if score > 0.7 and clarifying_question:
+        return {
+            "query_ambiguity_score": score,
+            "clarification_question": clarifying_question,
+            "needs_clarification": True,
+            "logs": [{
+                "step": "clarifier",
+                "source": "Clarifier",
+                "message": f"❓ Query is ambiguous (score: {score:.2f}). Asking for clarification...",
+                "status": "awaiting_user"
+            }]
+        }
+    else:
+        # Query is clear enough, proceed
+        return {
+            "query_ambiguity_score": score,
+            "needs_clarification": False,
+            "logs": [{
+                "step": "clarifier",
+                "source": "Clarifier",
+                "message": f"✓ Query is clear (ambiguity score: {score:.2f})",
+                "status": "completed"
+            }]
+        }
+
+
 # ===== ROUTER NODE =====
 
 async def router_node(state: ResearchState) -> Dict:
@@ -113,6 +201,37 @@ async def search_node(state: ResearchState) -> Dict:
         
         found_papers = list(unique_papers.values())[:10]  # Limit to 10 total
         
+        # === AUTO-SAVE TO PROJECT LIBRARY ===
+        project_id = state.get("project_id")
+        if project_id:
+            try:
+                db = next(get_db())
+                for paper in found_papers:
+                    # Check if already exists in this project
+                    exists = db.query(LibraryItem).filter(
+                        LibraryItem.project_id == project_id,
+                        LibraryItem.title == paper["title"]
+                    ).first()
+                    
+                    if not exists:
+                        new_item = LibraryItem(
+                            project_id=project_id,
+                            title=paper["title"],
+                            authors=paper.get("authors", []),
+                            year=paper.get("year"),
+                            abstract=paper.get("abstract") or paper.get("summary", ""),
+                            url=paper.get("url") or paper.get("pdf_url"),
+                            arxiv_id=paper.get("paperId") if "arxiv" in str(paper.get("paperId", "")).lower() else None,
+                            is_selected_for_context=False  # Auto-added but not auto-selected for chat context
+                        )
+                        db.add(new_item)
+                        # Add the DB ID to the paper object in state so frontend can link it
+                        # But wait, we need to commit first to get ID
+                db.commit()
+                db.close()
+            except Exception as save_err:
+                print(f"Error auto-saving papers: {save_err}") # Non-blocking
+        
         return {
             "found_papers": found_papers,
             "search_iteration": iteration + 1,
@@ -122,7 +241,7 @@ async def search_node(state: ResearchState) -> Dict:
                 {
                     "step": "search",
                     "source": "MultiSourceSearch",
-                    "message": f"✓ Found {len(found_papers)} papers from multiple sources",
+                    "message": f"✓ Found {len(found_papers)} papers and saved to library",
                     "status": "completed",
                     "metadata": {
                         "count": len(found_papers),
@@ -151,7 +270,7 @@ async def search_node(state: ResearchState) -> Dict:
 # ===== RANKER NODE (Discovery Loop Decision Point) =====
 
 async def ranker_node(state: ResearchState) -> Dict:
-    """Score papers for relevance using Gemini"""
+    """Score papers for relevance using AI"""
     
     query = state["query"]
     found_papers = state["found_papers"]
@@ -190,7 +309,7 @@ async def ranker_node(state: ResearchState) -> Dict:
             {
                 "step": "rank",
                 "source": "Ranker",
-                "message": f"✓ Top score: {top_score:.2f} (threshold: {settings.relevance_threshold})",
+                "message": f"✓ Ranked {len(ranked_papers)} papers. Top score: {top_score:.2f}",
                 "status": "completed",
                 "metadata": {
                     "top_score": top_score,
@@ -201,9 +320,112 @@ async def ranker_node(state: ResearchState) -> Dict:
     }
 
 
+# ===== RESEARCH COORDINATOR NODE (Intelligent Search Management) =====
+
+async def research_coordinator_node(state: ResearchState) -> Dict:
+    """Intelligent agent that evaluates search results and decides strategy"""
+    from app.agents.specialists import get_research_coordinator_agent
+    
+    coordinator = get_research_coordinator_agent()
+    
+    query = state["query"]
+    found_papers = state["found_papers"]
+    ranked_papers = state["ranked_papers"]
+    iteration = state.get("search_iteration", 0)
+    
+    log_entry = {
+        "step": "research_coordinator",
+        "source": "Research Coordinator",
+        "message": "🧭 Evaluating search results and strategy...",
+        "status": "processing"
+    }
+    
+    # Get intelligent decision from coordinator agent
+    evaluation = await coordinator.evaluate_search_results(
+        query=query,
+        found_papers=found_papers,
+        ranked_papers=ranked_papers,
+        iteration=iteration
+    )
+    
+    decision = evaluation["decision"]
+    reasoning = evaluation["reasoning"]
+    suggestions = evaluation["suggestions"]
+    
+    # Build response log
+    response_log = {
+        "step": "research_coordinator",
+        "source": "Research Coordinator",
+        "message": f"🧭 Decision: {decision.upper()}",
+        "status": "completed",
+        "metadata": {
+            "decision": decision,
+            "reasoning": reasoning,
+            "suggestions": suggestions,
+            "quality_metrics": evaluation["quality_metrics"]
+        }
+    }
+    
+    return {
+        "coordinator_decision": decision,
+        "coordinator_reasoning": reasoning,
+        "coordinator_suggestions": suggestions,
+        "agent_history": [{
+            "agent": "research_coordinator",
+            "decision": decision,
+            "reasoning": reasoning,
+            "timestamp": None
+        }],
+        "logs": [log_entry, response_log]
+    }
+
+
 # ===== QUERY REFINER NODE (Discovery Loop Retry) =====
 
 async def refine_query_node(state: ResearchState) -> Dict:
+    """Refine search query based on coordinator's suggestions"""
+    from app.agents.specialists import get_research_coordinator_agent
+    
+    coordinator = get_research_coordinator_agent()
+    
+    original_query = state["query"]
+    iteration = state["search_iteration"]
+    coordinator_suggestions = state.get("coordinator_suggestions", "")
+    ranked_papers = state.get("ranked_papers", [])
+    
+    log_entry = {
+        "step": "refine",
+        "source": "QueryRefiner",
+        "message": "Refining query based on coordinator guidance...",
+        "status": "processing"
+    }
+    
+    # Get refined query from coordinator
+    reason = coordinator_suggestions if coordinator_suggestions else "Results not optimal"
+    refined_query = await coordinator.suggest_query_refinement(
+        original_query=original_query,
+        search_results=ranked_papers,
+        reason=reason
+    )
+    
+    return {
+        "refined_query": refined_query,
+        "search_iteration": iteration + 1,
+        "logs": [
+            log_entry,
+            {
+                "step": "refine",
+                "source": "QueryRefiner",
+                "message": f"✓ Refined query: \"{refined_query}\"",
+                "status": "completed"
+            }
+        ]
+    }
+
+
+# ===== OLD REFINE NODE (BACKUP - can be removed) =====
+
+async def refine_query_node_old(state: ResearchState) -> Dict:
     """Refine search query based on failed results"""
     
     original_query = state["query"]
@@ -387,7 +609,13 @@ async def writer_node(state: ResearchState) -> Dict:
         prompt += f"\n\n**REVISION FEEDBACK FROM REVIEWER:**\n{critique}\n\nPlease address this feedback."
     
     # === GENERATE TEXT ===
-    draft_text = await ai_client.generate_text(prompt, temperature=0.7)
+    # ALWAYS use studio mode for academic writing (original, plagiarism-free)
+    # This ensures scholarflow-studio (3B) is used for drafting, not general model
+    draft_text = await ai_client.generate_text(
+        prompt, 
+        temperature=0.7,
+        mode="studio"  # Force studio mode for all drafting
+    )
     
     # Add to memory
     memory = get_memory_agent()
@@ -497,6 +725,32 @@ async def rag_response_node(state: ResearchState) -> Dict:
     library_context = None
     library_papers_info = []
     
+    # ===== STEP 0: RETRIEVE UNIFIED PROJECT MEMORY (Chat History) =====
+    memory_context = []
+    try:
+        # Search for past relevant chat interactions (Unified Memory)
+        chat_results = await vector_store.search_similar(
+            project_id=project_id,
+            query=query,
+            top_k=3,  # Get top 3 conversaton snippets
+            include_metadata=True
+        )
+        
+        for res in chat_results:
+            # Only include if it's a chat log
+            if res.get("type") == "chat":
+                 memory_context.append(f"Previously discussed: {res.get('text')}")
+                 
+        if memory_context:
+            logs.append({
+                "step": "rag_response",
+                "source": "UnifiedMemory",
+                "message": f"🧠 Recalled {len(memory_context)} relevant past interactions",
+                "status": "completed"
+            })
+    except Exception as mem_err:
+        print(f"Memory retrieval warning: {mem_err}")
+
     # ===== STEP 1: CHECK CONTEXT SHELF FIRST =====
     if selected_paper_ids:
         log_entry = {
@@ -641,7 +895,8 @@ Would you like me to try a different search?""",
             query=query,
             papers=papers_to_use,
             ai_client=ai_client,
-            prompt_type="research"
+            prompt_type="research",
+            research_context="\n\n".join(memory_context) if memory_context else None
         )
         
         response_content = result["response"]

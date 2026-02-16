@@ -5,6 +5,7 @@ import { AgentAvatar } from './AgentAvatar';
 // import { MOCK_PAPERS } from '../constants'; (Removed)
 import Markdown from 'react-markdown';
 import { useStreamingChat, useStreamingDraft } from '../hooks/useStreaming';
+import { generateOutline } from '../lib/api-client';
 
 interface SidebarRightProps {
     appMode: AppMode;
@@ -244,44 +245,36 @@ export const SidebarRight: React.FC<SidebarRightProps> = ({
     const handleGenerateOutline = async () => {
         if (!activeProject) return;
         setIsGeneratingOutline(true);
-        if (addAgentLog) addAgentLog('Co-Author', 'Auto-generating research plan...');
+        if (addAgentLog) addAgentLog('Co-Author', 'Generating research plan from selected papers...');
 
         try {
-            // Trigger the planner via chat
-            // Ideally we would have a dedicated endpoint or we parse the JSON from chat
-            // For this refactor, we will simulate the outline generation using the chat stream 
-            // but prompting for JSON.
+            // Call the proper planner API endpoint
+            const sections = await generateOutline(
+                activeProject.id,
+                activeProject.papers.map(p => p.id),
+                activeProject.assets ? activeProject.assets.map(a => a.id) : [],
+                'IEEE'
+            );
 
-            let accumulatedJson = "";
-            await streamChat({
-                project_id: activeProject.id,
-                message: "Generate a detailed research outline for this project based on the uploaded papers. Return the response as a valid JSON array of objects with keys: id, title, description, relevantPaperIds (empty array), status ('pending'). Do not wrap in markdown blocks.",
-                selected_paper_ids: activeProject.papers,
-                lab_asset_ids: []
-            },
-                (chunk) => accumulatedJson += chunk,
-                (fullText) => {
-                    try {
-                        // Clean potential markdown code blocks
-                        const cleanJson = fullText.replace(/```json/g, '').replace(/```/g, '').trim();
-                        const parsed: OutlineSection[] = JSON.parse(cleanJson);
-                        // Ensure defaults
-                        const validated = parsed.map((s, i) => ({
-                            ...s,
-                            id: s.id || `section-${Date.now()}-${i}`,
-                            status: 'pending' as const,
-                            relevantPaperIds: s.relevantPaperIds || [],
-                            recommendedAssetTypes: s.recommendedAssetTypes || []
-                        }));
-                        setOutline(validated);
-                        if (addAgentLog) addAgentLog('Co-Author', `Generated ${validated.length} sections.`, 'success');
-                    } catch (e) {
-                        console.error("Failed to parse outline JSON", e);
-                        if (addAgentLog) addAgentLog('Co-Author', 'Failed to generate valid structure.', 'error');
-                    }
-                });
+            // Validate and set outline
+            const validated = sections.map((s, i) => ({
+                ...s,
+                id: s.id || `section-${Date.now()}-${i}`,
+                status: s.status || ('pending' as const),
+                relevantPaperIds: s.relevantPaperIds || [],
+                recommendedAssetTypes: s.recommendedAssetTypes || []
+            }));
 
-        } catch (e) { console.error(e); }
+            setOutline(validated);
+            if (addAgentLog) {
+                addAgentLog('Co-Author', `✓ Generated ${validated.length} sections`, 'success');
+                addAgentLog('Co-Author', 'Ready to start drafting! Select a section to begin.', 'info');
+            }
+
+        } catch (e) {
+            console.error('Outline generation error:', e);
+            if (addAgentLog) addAgentLog('Co-Author', 'Failed to generate outline. Please try again.', 'error');
+        }
         finally { setIsGeneratingOutline(false); }
     };
 

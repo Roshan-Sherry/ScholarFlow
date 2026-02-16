@@ -127,6 +127,9 @@ We are working together on a research project. Your goal is to help me synthesiz
 ## Our Research Materials (Context Shelf)
 {paper_context}
 
+## Previous Conversation Context (Unified Memory)
+{research_context}
+
 ## Instructions
 1. Engage as a knowledgeable peer. Use "We found...", "Our sources suggest...", or "I recommend we look at..."
 2. Synthesize answers from the provided papers. Do not just list facts; build an argument.
@@ -171,7 +174,8 @@ async def generate_grounded_response(
     query: str,
     papers: List[Dict],
     ai_client,
-    prompt_type: str = "research"
+    prompt_type: str = "research",
+    research_context: Optional[str] = None  # NEW: Unified memory context
 ) -> Dict:
     """
     Generate a response grounded in the provided papers.
@@ -188,7 +192,11 @@ async def generate_grounded_response(
     if prompt_type == "summary":
         prompt = RAG_SUMMARY_PROMPT.format(query=query, paper_context=paper_context)
     else:
-        prompt = RAG_RESEARCH_PROMPT.format(query=query, paper_context=paper_context)
+        prompt = RAG_RESEARCH_PROMPT.format(
+            query=query, 
+            paper_context=paper_context,
+            research_context=research_context or "No relevant past context found."
+        )
     
     # Generate response
     response = await ai_client.generate_text(prompt, temperature=0.3)  # Low temp for accuracy

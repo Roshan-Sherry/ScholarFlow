@@ -33,7 +33,8 @@ logger = logging.getLogger(__name__)
 async def lifespan(app: FastAPI):
     """Application lifespan events"""
     # Startup
-    logger.info("🚀 Initializing ScholarFlow Backend...")
+    # Startup
+    logger.info("[STARTUP] Initializing ScholarFlow Backend...")
     init_db()
     
     # Ensure uploads directory exists
@@ -41,12 +42,12 @@ async def lifespan(app: FastAPI):
     
     # Verify Discovery Project
     # in a real app, this logic might be in init_db, but safe to double check or rely on reset_db
-    logger.info("✅ Database initialized")
+    logger.info("[OK] Database initialized")
     
     yield
     
     # Shutdown
-    logger.info("🛑 Shutting down...")
+    logger.info("[SHUTDOWN] Shutting down...")
 
 
 # Create FastAPI application
@@ -78,6 +79,8 @@ app.include_router(papers.router, prefix="/api/v1")
 app.include_router(research.router, prefix="/api/v1")
 app.include_router(agents.router, prefix="/api/v1")  # Specialized agents
 app.include_router(voice.router)  # Voice endpoints for avatar
+from app.api import avatar
+app.include_router(avatar.router, prefix="/api/v1")  # Anam.ai Avatar
 
 # Mount Uploads for Static Access (PDF Viewer)
 from fastapi.staticfiles import StaticFiles

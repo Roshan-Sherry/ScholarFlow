@@ -20,12 +20,20 @@ def setup_logging():
     root_logger.setLevel(logging.INFO)
 
     # Console Handler
+    if sys.platform == "win32":
+        # Force UTF-8 encoding for Windows console to support emojis
+        try:
+            sys.stdout.reconfigure(encoding='utf-8')
+            sys.stderr.reconfigure(encoding='utf-8')
+        except Exception:
+            pass
+
     console_handler = logging.StreamHandler(sys.stdout)
     console_handler.setFormatter(formatter)
     root_logger.addHandler(console_handler)
 
     # File Handler
-    file_handler = logging.FileHandler(log_file)
+    file_handler = logging.FileHandler(log_file, encoding="utf-8")
     file_handler.setFormatter(formatter)
     root_logger.addHandler(file_handler)
 

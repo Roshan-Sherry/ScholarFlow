@@ -21,6 +21,9 @@ interface WorkspaceDiscoveryProps {
     setTurns: React.Dispatch<React.SetStateAction<ResearchTurn[]>>;
     selectedResultIds: Set<string>;
     setSelectedResultIds: React.Dispatch<React.SetStateAction<Set<string>>>;
+    // Session Props
+    activeSessionId: string | null;
+    onSessionChange: (id: string | null) => void;
 }
 
 export const WorkspaceDiscovery: React.FC<WorkspaceDiscoveryProps> = ({
@@ -37,7 +40,9 @@ export const WorkspaceDiscovery: React.FC<WorkspaceDiscoveryProps> = ({
     turns,
     setTurns,
     selectedResultIds,
-    setSelectedResultIds
+    setSelectedResultIds,
+    activeSessionId,
+    onSessionChange
 }) => {
     const [query, setQuery] = useState('');
     const [knownPapers, setKnownPapers] = useState<Map<string, Paper>>(new Map());
@@ -83,7 +88,17 @@ export const WorkspaceDiscovery: React.FC<WorkspaceDiscoveryProps> = ({
             // <WorkspaceDiscovery ... /> is conditionally rendered.
 
             try {
-                const history = await fetchChatHistory(activeProjectId);
+                // Fetch history for specific session if active, OR generic project history if supported (legacy)
+                // If activeSessionId is null, we might want to clear turns or show empty
+                // For now, let's assume we fetch project history if no session? No, that mixes chats.
+                // If no session, clear history.
+
+                if (!activeSessionId) {
+                    setTurns([]);
+                    return;
+                }
+
+                const history = await fetchChatHistory(activeProjectId, activeSessionId);
                 if (!isMounted) return;
 
                 if (history && history.length > 0) {
@@ -125,7 +140,7 @@ export const WorkspaceDiscovery: React.FC<WorkspaceDiscoveryProps> = ({
         fetchHistory();
 
         return () => { isMounted = false; };
-    }, [activeProjectId, setTurns]); // Run when project changes
+    }, [activeProjectId, activeSessionId, setTurns]); // Run when project or session changes
 
 
     useEffect(() => {
@@ -184,6 +199,7 @@ export const WorkspaceDiscovery: React.FC<WorkspaceDiscoveryProps> = ({
 
             await streamChat({
                 project_id: activeProjectId, // Use current project for discovery
+                session_id: activeSessionId || undefined,
                 message: userQuery,
                 selected_paper_ids: Array.from(selectedContextIds),
                 lab_asset_ids: []
@@ -441,19 +457,22 @@ export const WorkspaceDiscovery: React.FC<WorkspaceDiscoveryProps> = ({
                                                 <div className="prose prose-sm max-w-none text-gray-800 leading-relaxed">
                                                     <Markdown components={{
                                                         p: ({ children }) => {
-                                                            // Custom renderer to detect [n] patterns
+                                                            // Custom renderer to detect [n] and [n, p.x] patterns
                                                             return (
                                                                 <p className="mb-4 last:mb-0">
                                                                     {React.Children.map(children, child => {
                                                                         if (typeof child === 'string') {
-                                                                            // Regex to find [n] patterns
-                                                                            const parts = child.split(/(\[\d+\])/g);
+                                                                            // Regex to find [n] or [n, p.x] patterns
+                                                                            const parts = child.split(/(\[\d+(?:,\s*p\.?\s*\d+)?\])/g);
                                                                             return parts.map((part, index) => {
-                                                                                const match = part.match(/^\[(\d+)\]$/);
+                                                                                // Match [number...]
+                                                                                const match = part.match(/^\[(\d+)(?:,\s*p\.?\s*(\d+))?\]$/);
+
                                                                                 if (match) {
                                                                                     const citationIndex = parseInt(match[1]);
+                                                                                    const pageNum = match[2] ? parseInt(match[2]) : undefined;
+
                                                                                     // Find the paper corresponding to this index (1-based)
-                                                                                    // The 'sources' array in the turn typically maps 1:1 if we assume order
                                                                                     const paper = turn.sources && turn.sources[citationIndex - 1];
 
                                                                                     if (paper) {
@@ -462,9 +481,9 @@ export const WorkspaceDiscovery: React.FC<WorkspaceDiscoveryProps> = ({
                                                                                                 key={index}
                                                                                                 className="inline-flex items-center justify-center min-w-[20px] h-5 px-1 ml-1 text-[10px] font-bold text-indigo-600 bg-indigo-100 rounded cursor-pointer hover:bg-indigo-200 transition-colors align-text-top"
                                                                                                 onClick={() => onOpenPaper(paper.id)}
-                                                                                                title={`View: ${paper.title}`}
+                                                                                                title={`View: ${paper.title}${pageNum ? ` (Page ${pageNum})` : ''}`}
                                                                                             >
-                                                                                                {citationIndex}
+                                                                                                {citationIndex}{pageNum ? <span className="text-[8px] font-normal opacity-70 ml-0.5">p.{pageNum}</span> : null}
                                                                                             </span>
                                                                                         );
                                                                                     }

@@ -188,6 +188,9 @@ class ChatSession(Base):
     id = Column(String, primary_key=True, default=lambda: str(uuid.uuid4()))
     project_id = Column(String, ForeignKey("projects.id"), nullable=False)
     
+    # Session metadata
+    title = Column(String(255), default="New Chat")  # NEW: Named sessions
+    
     # Messages stored as JSON
     messages = Column(JSON)  # [{role: "user", content: "..."}, {role: "assistant", content: "..."}]
     

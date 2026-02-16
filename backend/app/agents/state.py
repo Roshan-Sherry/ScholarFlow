@@ -18,6 +18,7 @@ class ResearchState(TypedDict):
     # User input
     query: str
     project_id: str
+    session_id: Optional[str]  # NEW
     
     # Discovery workflow state
     found_papers: List[Dict]  # Papers from search APIs
@@ -43,6 +44,18 @@ class ResearchState(TypedDict):
     
     # Intent routing
     intent: Optional[str]  # "SEARCH" | "CHAT" | "DRAFT" | "ANALYZE"
+    operation_mode: Optional[str]  # "research" | "studio" - Research=learning, Studio=original writing
+    
+    # Query clarification
+    query_ambiguity_score: Optional[float]  # 0.0-1.0, >0.7 triggers clarification
+    clarification_question: Optional[str]  # Question to ask user
+    clarification_answer: Optional[str]  # User's answer
+    needs_clarification: bool  # Flag for clarifier node
+    
+    # Research coordinator (intelligent search management)
+    coordinator_decision: Optional[str]  # "proceed" | "refine_query" | "expand_search" | "try_different_approach"
+    coordinator_reasoning: Optional[str]  # Why this decision was made
+    coordinator_suggestions: Optional[str]  # Specific actions to take
     
     # Workflow logs (for SSE streaming to frontend)
     logs: Annotated[List[Dict], operator.add]
@@ -103,13 +116,16 @@ def create_initial_state(
     selected_paper_ids: List[str] = None,
     lab_asset_ids: List[str] = None,
     research_asset_ids: List[str] = None,  # NEW
-    current_section: str = None  # NEW
+    current_section: str = None,  # NEW
+    operation_mode: str = "research",  # NEW: "research" (learning) or "studio" (writing)
+    session_id: str = None  # NEW
 ) -> ResearchState:
     """Factory function to create initial state"""
     return {
         "messages": [],
         "query": query,
         "project_id": project_id,
+        "session_id": session_id,
         "found_papers": [],
         "ranked_papers": [],
         "selected_paper_ids": selected_paper_ids or [],
@@ -125,6 +141,11 @@ def create_initial_state(
         "revision_count": 0,
         "needs_revision": False,
         "intent": None,
+        "operation_mode": operation_mode,  # NEW
+        "query_ambiguity_score": None,
+        "clarification_question": None,
+        "clarification_answer": None,
+        "needs_clarification": False,
         "logs": [],
         "papers_to_save": [],  # Papers cited in response
         "error": None,
@@ -150,18 +171,7 @@ def create_initial_state(
         "completed_tasks": [],
         "reroute_requested": False,
         "reroute_reason": None,
-        "suggested_next_agent": None,
-        "supervisor_decision": None,
-        "conversation_memory": [],
-        "research_insights": {"key_findings": [], "methodologies": [], "gaps_identified": []},
-        "user_preferences": {"citation_style": "IEEE", "writing_tone": "academic"},
-        "citations_used": {},
-        "bibliography": [],
-        "citation_suggestions": [],
-        "next_actions": [],
-        "quality_feedback": None,
-        "synthesis_summary": None,
-        "comparative_analysis": None
+        "suggested_next_agent": None
     }
 
 

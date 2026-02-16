@@ -10,6 +10,9 @@ class Settings(BaseSettings):
     # Google Gemini API (REQUIRED - must be set in .env file)
     google_api_key: str
     
+    # Anam.ai API Key (Optional)
+    anam_api_key: str | None = None
+    
     # Database
     database_url: str = "sqlite:///./data/scholarflow.db"
 
@@ -28,6 +31,8 @@ class Settings(BaseSettings):
     ollama_base_url: str = "http://localhost:11434"
     ollama_model_fast: str = "llama3.2:1b"  # Fast 1B model for quick tasks (routing, intent)
     ollama_model_smart: str = "scholarmate"  # Smart 3B model for quality tasks (writing, synthesis)
+    ollama_model_search: str = "scholarflow-search"  # 1B model optimized for paper relevance scoring (research mode)
+    ollama_model_studio: str = "scholarflow-studio"  # 3B model optimized for original academic writing (studio mode)
     
     # Hybrid Mode Settings
     use_ollama_for_chat: bool = True     # Chat -> Ollama

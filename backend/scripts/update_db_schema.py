@@ -14,15 +14,26 @@ def migrate():
     try:
         print("Attempting to add 'url' column to 'library_items'...")
         cursor.execute("ALTER TABLE library_items ADD COLUMN url VARCHAR(500)")
-        conn.commit()
         print("✅ Successfully added 'url' column.")
-    except sqlite3.OperationalError as e:
-        if "duplicate column" in str(e):
-            print("ℹ️ Column 'url' already exists.")
-        else:
-            print(f"❌ Error adding column: {e}")
-    finally:
-        conn.close()
+    except sqlite3.OperationalError:
+        pass
+
+    try:
+        print("Attempting to add 'title' column to 'chat_sessions'...")
+        cursor.execute("ALTER TABLE chat_sessions ADD COLUMN title VARCHAR(255) DEFAULT 'New Chat'")
+        print("✅ Successfully added 'title' column.")
+    except sqlite3.OperationalError:
+        pass
+        
+    try:
+        print("Attempting to add 'current_phase' column to 'projects'...")
+        cursor.execute("ALTER TABLE projects ADD COLUMN current_phase VARCHAR(50)")
+        print("✅ Successfully added 'current_phase' column.")
+    except sqlite3.OperationalError:
+        pass
+
+    conn.commit()
+    conn.close()
 
 if __name__ == "__main__":
     migrate()

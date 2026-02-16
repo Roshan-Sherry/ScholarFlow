@@ -174,6 +174,7 @@ class ChatMessage(BaseModel):
 class ChatRequest(BaseModel):
     """Request schema for chat/workflow stream"""
     project_id: str
+    session_id: Optional[str] = None  # NEW: Target specific chat session
     message: str
     selected_paper_ids: List[str] = []
     lab_asset_ids: List[str] = []

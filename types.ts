@@ -109,3 +109,10 @@ export interface ResearchTurn {
   answer?: string;
   sources?: Paper[];
 }
+
+export interface ChatSession {
+  id: string;
+  title: string;
+  updated_at: string;
+  message_count: number;
+}

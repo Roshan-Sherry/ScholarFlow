@@ -202,6 +202,7 @@ export const deleteLabAsset = async (assetId: string): Promise<void> => {
 
 export interface ChatStreamPayload {
   project_id: string;
+  session_id?: string;
   message: string;
   selected_paper_ids: string[];
   lab_asset_ids: string[];
@@ -260,9 +261,13 @@ export async function* streamChatWorkflow(
   }
 }
 
-export const fetchChatHistory = async (projectId: string): Promise<any[]> => {
+export const fetchChatHistory = async (projectId: string, sessionId?: string): Promise<any[]> => {
     try {
-        const { data } = await apiClient.get<any[]>(`/projects/${projectId}/chat`);
+        const url = sessionId 
+            ? `/projects/${projectId}/chat?session_id=${sessionId}`
+            : `/projects/${projectId}/chat`;
+            
+        const { data } = await apiClient.get<any[]>(url);
         return data.map(msg => ({
             id: `msg-${Math.random()}`, // Backend doesn't store IDs per message in JSON yet
             role: msg.role === 'user' ? 'user' : 'agent',
@@ -273,6 +278,26 @@ export const fetchChatHistory = async (projectId: string): Promise<any[]> => {
     } catch (error) {
         console.error('Error fetching chat history:', error);
         return [];
+    }
+};
+
+export const fetchChatSessions = async (projectId: string): Promise<import('../types').ChatSession[]> => {
+    try {
+        const { data } = await apiClient.get<import('../types').ChatSession[]>(`/projects/${projectId}/sessions`);
+        return data;
+    } catch (error) {
+        console.error('Error fetching chat sessions:', error);
+        return [];
+    }
+};
+
+export const createChatSession = async (projectId: string, title: string): Promise<import('../types').ChatSession | null> => {
+    try {
+        const { data } = await apiClient.post<import('../types').ChatSession>(`/projects/${projectId}/sessions`, { title });
+        return data;
+    } catch (error) {
+        console.error('Error creating chat session:', error);
+        return null;
     }
 };
 

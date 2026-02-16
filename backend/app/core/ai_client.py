@@ -77,7 +77,24 @@ class AIClient:
                 temperature=0.7,  # Higher for faster sampling
                 keep_alive=-1  # Keep model in memory indefinitely
             )
-            logger.info(f"Ollama models initialized: {settings.ollama_model_smart} (smart), {settings.ollama_model_fast} (fast)")
+            
+            # Specialized model for research mode (paper relevance scoring)
+            self.search_model = ChatOllama(
+                model=settings.ollama_model_search,  # scholarflow-search
+                base_url=base_url,
+                temperature=0.2,  # Deterministic scoring
+                keep_alive=-1
+            )
+            
+            # Specialized model for studio mode (original academic writing)
+            self.studio_model = ChatOllama(
+                model=settings.ollama_model_studio,  # scholarflow-studio
+                base_url=base_url,
+                temperature=0.75,  # Creative but controlled
+                keep_alive=-1
+            )
+            
+            logger.info(f"Ollama models initialized: {settings.ollama_model_smart} (smart), {settings.ollama_model_fast} (fast), {settings.ollama_model_search} (search), {settings.ollama_model_studio} (studio)")
         else:
             logger.warning("Ollama not available, using Gemini for all tasks")
             self._init_gemini()
@@ -178,9 +195,18 @@ class AIClient:
         prompt: str,
         temperature: float = 0.7,
         max_tokens: int = 2048,
-        use_flash: bool = False
+        use_flash: bool = False,
+        mode: str = "general"  # "general", "search", "studio"
     ) -> str:
-        """Generate text using either mock or real model"""
+        """Generate text using either mock or real model
+        
+        Args:
+            prompt: The prompt to generate text from
+            temperature: Temperature for generation (overridden by mode defaults)
+            max_tokens: Max tokens to generate
+            use_flash: Use fast model (overrides mode selection)
+            mode: Operation mode - "general", "search" (research/ranking), "studio" (academic writing)
+        """
         import time
         
         start = time.time()
@@ -207,21 +233,45 @@ The effectiveness of CoT is highly dependent on the quality of the reasoning dem
                 return "This is a mock response for testing. The actual AI client is disabled to avoid quota limits."
         
         else:
-            # REAL IMPLEMENTATION
-            model = self.flash_model if use_flash else self.text_model
+            # REAL IMPLEMENTATION - Select model based on mode
+            if use_flash:
+                model = self.flash_model
+                model_name = "flash"
+            elif mode == "search":
+                model = self.search_model  # scholarflow-search (1B, optimized for ranking)
+                model_name = "search"
+            elif mode == "studio":
+                model = self.studio_model  # scholarflow-studio (3B, optimized for writing)
+                model_name = "studio"
+            else:
+                model = self.text_model  # Default: scholarmate
+                model_name = "smart"
+            
             # Bind runtime params - temperature and max_tokens removed to fix API error
             try:
                configured = model  # Use model directly without bind
             except:
                configured = model
     
-            response = await configured.ainvoke(prompt)
-            
-            elapsed = time.time() - start
-            model_name = "flash" if use_flash else "smart"
-            logger.info(f"Generation ({model_name} model) took {elapsed:.2f}s")
-            
-            return response.content
+            # Try Ollama with fallback to Gemini on failure
+            try:
+                response = await configured.ainvoke(prompt)
+                elapsed = time.time() - start
+                logger.info(f"Generation ({model_name} model, mode={mode}) took {elapsed:.2f}s")
+                return response.content
+            except Exception as e:
+                logger.error(f"Ollama model failed ({model_name}): {e}. Falling back to Gemini.")
+                if hasattr(self, 'gemini_fallback'):
+                    try:
+                        response = await self.gemini_fallback.ainvoke(prompt)
+                        elapsed = time.time() - start
+                        logger.warning(f"Gemini fallback succeeded after {elapsed:.2f}s")
+                        return response.content
+                    except Exception as fallback_error:
+                        logger.error(f"Gemini fallback also failed: {fallback_error}")
+                        raise Exception(f"Both primary and fallback models failed: {e}")
+                else:
+                    raise Exception(f"Primary model failed and no fallback available: {e}")
 
     async def generate_text_stream(
         self,
@@ -249,10 +299,16 @@ The effectiveness of CoT is highly dependent on the quality of the reasoning dem
             except:
                configured = model
     
-            async for chunk in configured.astream(prompt):
-                content = chunk.content
-                if content:
-                    yield content
+            try:
+                async for chunk in configured.astream(prompt):
+                    content = chunk.content
+                    if content:
+                        yield content
+            except Exception as e:
+                logger.error(f"Streaming failed: {e}. Falling back to non-streaming.")
+                # Fallback to non-streaming generation
+                result = await self.generate_text(prompt, temperature, max_tokens, use_flash)
+                yield result
 
     async def analyze_image(
         self,
@@ -338,7 +394,7 @@ Return ONLY the category name, nothing else."""
         paper_abstract: str,
         query: str
     ) -> float:
-        """Score paper relevance"""
+        """Score paper relevance using specialized search model (optimized for fast, accurate ranking)"""
         if settings.mock_ai_responses:
             """MOCK paper scoring"""
             import random
@@ -346,7 +402,7 @@ Return ONLY the category name, nothing else."""
             return 0.85 + (random.random() * 0.1)
             
         else:
-            # REAL IMPLEMENTATION
+            # REAL IMPLEMENTATION - Use search model for fast relevance scoring
             prompt = f"""Rate how relevant this paper is to the user's query on a scale of 0.0 to 1.0.
 
 Query: "{query}"
@@ -356,12 +412,17 @@ Abstract: {paper_abstract}
 Return ONLY a decimal number between 0.0 and 1.0."""
             
             try:
-                result = await self.generate_text(prompt, temperature=0.2, use_flash=True)
+                # Use search mode for optimized relevance scoring
+                result = await self.generate_text(prompt, temperature=0.2, use_flash=False, mode="search")
                 # Cleanup potential non-numeric chars
                 clean_result = ''.join(c for c in result if c.isdigit() or c == '.')
                 score = float(clean_result)
                 return max(0.0, min(1.0, score))
-            except (ValueError, TypeError):
+            except (ValueError, TypeError) as e:
+                logger.warning(f"Score parsing failed: {e}. Returning default 0.5")
+                return 0.5
+            except Exception as e:
+                logger.error(f"Relevance scoring failed: {e}. Returning default 0.5")
                 return 0.5
 
     async def generate_batch(

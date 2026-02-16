@@ -143,17 +143,67 @@ async def delete_project(
     return {"message": "Project deleted successfully"}
 
 
-@router.get("/{project_id}/chat", response_model=List[dict])
-async def get_project_chat_history(
+@router.post("/{project_id}/sessions", response_model=dict)
+async def create_chat_session(
+    project_id: str,
+    title: str = "New Chat",
+    db: Session = Depends(get_db)
+):
+    """Create a new chat session for a project"""
+    from app.models.database import ChatSession
+    
+    session = ChatSession(
+        project_id=project_id,
+        title=title,
+        messages=[]
+    )
+    db.add(session)
+    db.commit()
+    db.refresh(session)
+    
+    return {"id": session.id, "title": session.title, "created_at": session.created_at}
+
+
+@router.get("/{project_id}/sessions", response_model=List[dict])
+async def list_chat_sessions(
     project_id: str,
     db: Session = Depends(get_db)
 ):
-    """Get chat history for a project"""
+    """List all chat sessions for a project"""
     from app.models.database import ChatSession
     
-    session = db.query(ChatSession).filter(ChatSession.project_id == project_id).first()
+    sessions = db.query(ChatSession).filter(
+        ChatSession.project_id == project_id
+    ).order_by(ChatSession.updated_at.desc()).all()
+    
+    return [
+        {"id": s.id, "title": s.title, "updated_at": s.updated_at, "message_count": len(s.messages) if s.messages else 0}
+        for s in sessions
+    ]
+
+
+@router.get("/{project_id}/chat", response_model=List[dict])
+async def get_project_chat_history(
+    project_id: str,
+    session_id: str = None,
+    db: Session = Depends(get_db)
+):
+    """Get chat history for a project (optionally specific session)"""
+    from app.models.database import ChatSession
+    
+    query = db.query(ChatSession).filter(ChatSession.project_id == project_id)
+    
+    if session_id:
+        query = query.filter(ChatSession.id == session_id)
+    else:
+        # Default to most recent updated session if no specific ID
+        query = query.order_by(ChatSession.updated_at.desc())
+        
+    session = query.first()
     
     if not session or not session.messages:
         return []
         
+    # Return session ID in header or wrapped response?
+    # For now just return messages to maintain compatibility
     return session.messages

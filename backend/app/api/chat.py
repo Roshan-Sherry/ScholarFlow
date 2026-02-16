@@ -36,7 +36,8 @@ async def stream_workflow(
                 selected_paper_ids=request.selected_paper_ids,
                 lab_asset_ids=request.lab_asset_ids,
                 research_asset_ids=request.research_asset_ids,  # NEW
-                current_section=request.current_section  # NEW
+                current_section=request.current_section,  # NEW
+                session_id=request.session_id  # NEW
             )
             
             # Send start event
@@ -183,39 +184,72 @@ async def stream_workflow(
                 save_db = SessionLocal()
                 
                 # Check for existing session or create new
-                chat_session = save_db.query(ChatSession).filter(
-                    ChatSession.project_id == request.project_id
-                ).first()
+                chat_session = None
+                if request.session_id:
+                   chat_session = save_db.query(ChatSession).filter(ChatSession.id == request.session_id).first()
                 
+                # If no specific session requested, or requested one not found (fallback), try finding ANY session for project (legacy)
+                # But with multi-chat, we should prioritize creating a NEW one if no ID provided?
+                # For backward compatibility, if no session_id, we find the *latest* one or create new.
+                if not chat_session:
+                    if request.session_id:
+                        # Explicit ID requested but not found -> Should likely default to creating new or error.
+                        # For robustness, let's create new.
+                        pass
+                    else:
+                        # Legacy fallback: Find latest
+                        chat_session = save_db.query(ChatSession).filter(
+                             ChatSession.project_id == request.project_id
+                        ).order_by(ChatSession.updated_at.desc()).first()
+
                 if not chat_session:
                     chat_session = ChatSession(
                         project_id=request.project_id,
+                        title="New Chat",  # Default title
                         messages=[]
                     )
                     save_db.add(chat_session)
+                    save_db.commit() # Commit to get ID
+                    save_db.refresh(chat_session)
                 
                 # Prepare new messages
+                timestamp = str(asyncio.get_event_loop().time())
                 new_messages = [
                     {
                         "role": "user", 
                         "content": request.message,
-                        "timestamp": str(asyncio.get_event_loop().time()) 
+                        "timestamp": timestamp
                     },
                     {
                         "role": "assistant", 
                         "content": final_response or "I couldn't generate a response.",
                         "sources": [p['id'] for p in formatted_papers] if final_papers else [],
-                        "timestamp": str(asyncio.get_event_loop().time())
+                        "timestamp": timestamp
                     }
                 ]
                 
-                # Append to existing (need to reassignment for SQLAlchemy JSON mutation detection sometimes)
+                # Append to existing
                 current_msgs = list(chat_session.messages) if chat_session.messages else []
                 current_msgs.extend(new_messages)
                 chat_session.messages = current_msgs
                 
                 save_db.commit()
-                logger.info(f"Saved {len(new_messages)} messages to chat history for project {request.project_id}")
+                logger.info(f"Saved messages to chat session {chat_session.id}")
+                
+                # === INDEX FOR UNIFIED MEMORY ===
+                try:
+                    from app.services.vector_store import vector_store
+                    if final_response:
+                        vector_store.add_chat_interaction(
+                            project_id=request.project_id,
+                            session_id=chat_session.id,
+                            user_message=request.message,
+                            ai_response=final_response
+                        )
+                        logger.info("Indexed chat interaction for memory")
+                except Exception as index_err:
+                    logger.error(f"Failed to index chat memory: {index_err}")
+                
                 save_db.close()
                 
             except Exception as e:

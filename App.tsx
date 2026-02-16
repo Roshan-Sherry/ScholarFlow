@@ -57,6 +57,7 @@ export default function App() {
     // (Ideally move to a discoveryStore later, keeping local for now)
     const [discoveryTurns, setDiscoveryTurns] = useState<any[]>([]);
     const [discoverySelectedResultIds, setDiscoverySelectedResultIds] = useState<Set<string>>(new Set());
+    const [activeSessionId, setActiveSessionId] = useState<string | null>(null); // NEW: Multi-chat session tracker
 
     // Modals State
     const [isAssetModalOpen, setIsAssetModalOpen] = useState(false);
@@ -170,25 +171,25 @@ export default function App() {
 
     const handleGeneratePlanFromDiscovery = async (selectedPapers: Paper[]) => {
         if (!activeProject) return;
-        
+
         addAgentLog('System', `Generating Research Plan from ${selectedPapers.length} papers...`);
 
         try {
             const paperIds = selectedPapers.map(p => p.id);
-            
+
             // Generate outline for current project
             const outline = await api.generateOutline(activeProject.id, paperIds, [], 'IEEE');
-            
+
             addAgentLog('System', 'Research Plan generated successfully.', 'success');
 
             // Refresh project to get updated data
             const updatedProject = await api.fetchProject(activeProject.id);
             setActiveProject(updatedProject);
-            
+
             // Switch to Studio mode to view the generated plan
             setAppMode(AppMode.STUDIO);
             setViewState(ViewState.STUDIO);
-            
+
         } catch (error) {
             console.error(error);
             addAgentLog('System', `Failed to generate plan: ${error}`, 'error');
@@ -332,7 +333,7 @@ export default function App() {
 
     const handleAddToProject = async (paperId: string) => {
         if (!activeProject) return;
-        
+
         // Check if paper already in project
         if (activeProject.papers.some(p => p.id === paperId)) return;
 
@@ -340,16 +341,16 @@ export default function App() {
             // Fetch paper details and add to library
             const paper = await api.fetchPaper(paperId);
             await api.addPaperToLibrary(activeProject.id, paper);
-            
+
             // Refresh project to get updated papers
             const updatedProject = await api.fetchProject(activeProject.id);
             setActiveProject(updatedProject);
-            
+
             // Auto-select for context
             if (!selectedContextIds.has(paperId)) {
                 toggleContext(paperId);
             }
-            
+
             addAgentLog('System', `Added paper to library: ${paper.title}`, 'success');
         } catch (error) {
             console.error('Error adding paper:', error);
@@ -502,7 +503,9 @@ export default function App() {
         addAgentLog: addAgentLog,
         logs: agentLogs, // Passing logs for monitor display
         pendingMessage: pendingMessage,
-        onClearPendingMessage: () => setPendingMessage(null)
+        onClearPendingMessage: () => setPendingMessage(null),
+        activeSessionId: activeSessionId,
+        onSessionSelect: setActiveSessionId
     };
 
     const sidebarRightProps = {
@@ -625,6 +628,8 @@ export default function App() {
                             setTurns={setDiscoveryTurns}
                             selectedResultIds={discoverySelectedResultIds}
                             setSelectedResultIds={setDiscoverySelectedResultIds}
+                            activeSessionId={activeSessionId}
+                            onSessionChange={setActiveSessionId}
                         />
                     )
                 }

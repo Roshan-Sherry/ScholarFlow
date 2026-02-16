@@ -4,6 +4,7 @@ This module contains individual specialized agents:
 - CitationAgent: Manages citations, formats references, tracks sources
 - MemoryAgent: Maintains conversation history and context
 - SupervisorAgent: Coordinates between agents and makes routing decisions
+- ResearchCoordinatorAgent: Manages search strategy and discovery workflow
 - ProactiveAgent: Suggests next actions and improvements
 - SynthesisAgent: Combines information from multiple sources
 
@@ -575,6 +576,182 @@ Create a comparison table highlighting similarities and differences."""
         }
 
 
+# ===== RESEARCH COORDINATOR AGENT =====
+
+class ResearchCoordinatorAgent:
+    """
+    Intelligent agent that manages the research discovery workflow
+    - Evaluates search results quality
+    - Decides search strategy (refine, expand, or proceed)
+    - Determines when sufficient papers are found
+    - Guides the research direction like a co-author
+    - Provides reasoning for all decisions
+    """
+    
+    def __init__(self):
+        self.search_history = []
+        self.quality_threshold = 0.7
+        self.message_bus = get_message_bus()
+        
+    async def evaluate_search_results(
+        self,
+        query: str,
+        found_papers: List[Dict],
+        ranked_papers: List[Dict],
+        iteration: int
+    ) -> Dict:
+        """
+        Evaluate search results and decide next action
+        
+        Returns:
+            decision: "proceed" | "refine_query" | "expand_search" | "try_different_approach"
+            reasoning: Why this decision was made
+            suggestions: Specific actions to take
+        """
+        
+        num_papers = len(found_papers)
+        num_relevant = len([p for p in ranked_papers if p.get('score', 0) > self.quality_threshold])
+        avg_score = sum([p.get('score', 0) for p in ranked_papers]) / len(ranked_papers) if ranked_papers else 0
+        
+        prompt = f"""You are a Research Coordinator making strategic decisions about a literature search.
+
+SEARCH QUERY: "{query}"
+ITERATION: {iteration} (max: 3)
+
+RESULTS:
+- Total papers found: {num_papers}
+- Relevant papers (score >{self.quality_threshold}): {num_relevant}
+- Average relevance score: {avg_score:.2f}
+
+TOP 3 PAPERS:
+{chr(10).join([f"{i+1}. {p.get('title', 'Unknown')} (score: {p.get('score', 0):.2f})" for i, p in enumerate(ranked_papers[:3])])}
+
+As an expert research coordinator, evaluate this search:
+
+1. QUALITY ASSESSMENT: Are these results good enough?
+   - Do we have sufficient high-quality papers (5-10)?
+   - Are the top results truly relevant to the query?
+   - Is there good diversity in approaches/perspectives?
+
+2. DECISION: What should we do next?
+   - "proceed": Results are good, move to analysis
+   - "refine_query": Query is too broad/narrow, needs adjustment
+   - "expand_search": Need more papers, try related terms
+   - "try_different_approach": Current strategy isn't working
+
+3. REASONING: Why this decision? (Think like a co-author guiding research)
+
+4. SUGGESTIONS: Specific actions (e.g., "Focus on papers from 2020-2024", "Try 'RAG evaluation' instead")
+
+Return: decision|reasoning|suggestions"""
+
+        response = await ai_client.generate_text(prompt, temperature=0.4, use_flash=False)
+        
+        # Parse response
+        parts = response.split('|')
+        decision = parts[0].strip() if len(parts) > 0 else "proceed"
+        reasoning = parts[1].strip() if len(parts) > 1 else "Results evaluated"
+        suggestions = parts[2].strip() if len(parts) > 2 else ""
+        
+        # Publish decision to message bus
+        await self.message_bus.publish(
+            from_agent="research_coordinator",
+            topic=MessageTopics.AGENT_DECISION,
+            payload={
+                "decision": decision,
+                "reasoning": reasoning,
+                "num_papers": num_papers,
+                "num_relevant": num_relevant
+            }
+        )
+        
+        # Log decision
+        logger.info(f"🧭 Research Coordinator: {decision.upper()} - {reasoning}")
+        
+        return {
+            "decision": decision,
+            "reasoning": reasoning,
+            "suggestions": suggestions,
+            "quality_metrics": {
+                "total_papers": num_papers,
+                "relevant_papers": num_relevant,
+                "avg_score": avg_score,
+                "iteration": iteration
+            }
+        }
+    
+    async def suggest_query_refinement(
+        self,
+        original_query: str,
+        search_results: List[Dict],
+        reason: str
+    ) -> str:
+        """
+        Suggest an improved query based on results
+        """
+        
+        prompt = f"""You are refining a search query that didn't produce optimal results.
+
+ORIGINAL QUERY: "{original_query}"
+PROBLEM: {reason}
+
+CURRENT RESULTS (sample titles):
+{chr(10).join([f"- {p.get('title', '')[:100]}" for p in search_results[:5]])}
+
+As a research expert, suggest a refined query that will:
+1. Be more specific if results were too broad
+2. Use alternative terminology if results were too narrow
+3. Add domain context if results were off-topic
+4. Adjust time scope if results are outdated
+
+Return ONLY the refined query, nothing else."""
+
+        refined_query = await ai_client.generate_text(prompt, temperature=0.5, use_flash=True)
+        
+        return refined_query.strip().strip('"')
+    
+    async def assess_research_coverage(
+        self,
+        query: str,
+        collected_papers: List[Dict]
+    ) -> Dict:
+        """
+        Assess if we have sufficient coverage of the research topic
+        """
+        
+        prompt = f"""Assess research coverage for this query: "{query}"
+
+COLLECTED PAPERS: {len(collected_papers)}
+
+KEY PAPER TOPICS:
+{chr(10).join([f"- {p.get('title', '')}" for p in collected_papers[:10]])}
+
+As a research advisor, assess:
+1. Coverage score (0-10): How well do these papers cover the topic?
+2. Gaps: What important aspects are missing?
+3. Recommendation: Should we search for more papers or proceed?
+
+Return: score|gaps|recommendation"""
+
+        response = await ai_client.generate_text(prompt, temperature=0.4)
+        parts = response.split('|')
+        
+        try:
+            score = int(parts[0].strip()) if len(parts) > 0 else 7
+        except:
+            score = 7
+        
+        gaps = parts[1].strip() if len(parts) > 1 else "None identified"
+        recommendation = parts[2].strip() if len(parts) > 2 else "Proceed with analysis"
+        
+        return {
+            "coverage_score": score,
+            "gaps": gaps,
+            "recommendation": recommendation,
+            "sufficient": score >= 7
+        }
+
+
 # ===== AGENT FACTORY =====
 
 # Singleton instances
@@ -583,6 +760,7 @@ _memory_agent = None
 _supervisor_agent = None
 _proactive_agent = None
 _synthesis_agent = None
+_research_coordinator_agent = None
 
 def get_citation_agent() -> CitationAgent:
     global _citation_agent
@@ -613,3 +791,9 @@ def get_synthesis_agent() -> SynthesisAgent:
     if _synthesis_agent is None:
         _synthesis_agent = SynthesisAgent()
     return _synthesis_agent
+
+def get_research_coordinator_agent() -> ResearchCoordinatorAgent:
+    global _research_coordinator_agent
+    if _research_coordinator_agent is None:
+        _research_coordinator_agent = ResearchCoordinatorAgent()
+    return _research_coordinator_agent

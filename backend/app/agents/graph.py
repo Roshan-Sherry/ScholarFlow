@@ -10,9 +10,11 @@ import logging
 
 from app.agents.state import ResearchState
 from app.agents.nodes import (
+    clarifier_node,
     router_node,
     search_node,
     ranker_node,
+    research_coordinator_node,
     refine_query_node,
     lab_analyst_node,
     writer_node,
@@ -105,6 +107,16 @@ Return a structured outline."""
 
 
 # ===== CONDITIONAL EDGE FUNCTIONS =====
+
+def route_from_clarifier(state: ResearchState) -> Literal["search", "clarifier_wait"]:
+    """Route from clarifier - either proceed to search or wait for user answer"""
+    if state.get("needs_clarification"):
+        # Return special state to pause workflow and wait for user
+        return "clarifier_wait"
+    else:
+        # Query is clear, proceed to search
+        return "search"
+
 
 def route_after_intent(state: ResearchState) -> Literal["search_subgraph", "drafting_subgraph", "lab_analyst", "writer"]:
     """Route based on classified intent"""
@@ -535,6 +547,9 @@ def create_research_graph():
     graph.add_node("monitor", workflow_monitor_node)  # NEW
     graph.add_node("router", router_node)
     
+    # Query clarification
+    graph.add_node("clarifier", clarifier_node)
+    
     # Specialized agents
     graph.add_node("citation", citation_node)
     graph.add_node("proactive", proactive_node)
@@ -543,6 +558,7 @@ def create_research_graph():
     # Discovery nodes
     graph.add_node("search", search_node)
     graph.add_node("ranker", ranker_node)
+    graph.add_node("research_coordinator", research_coordinator_node)  # NEW: Intelligent search management
     graph.add_node("refine_query", refine_query_node)
     graph.add_node("save_to_context", save_papers_to_context)
     
@@ -587,10 +603,20 @@ def create_research_graph():
         "router",
         route_after_intent,
         {
-            "search_subgraph": "search",
+            "search_subgraph": "clarifier",  # NEW: Check clarity before search
             "drafting_subgraph": "planner",
             "lab_analyst": "lab_analyst",
             "writer": "writer"
+        }
+    )
+    
+    # Clarifier routing (checks if clarification needed)
+    graph.add_conditional_edges(
+        "clarifier",
+        route_from_clarifier,
+        {
+            "search": "search",  # Query clear, proceed to search
+            "clarifier_wait": END  # Wait for user answer, end workflow
         }
     )
     
@@ -606,11 +632,29 @@ def create_research_graph():
         }
     )
     
-    # ===== RANKER (Discovery Loop + can go to synthesis) =====
+    # ===== RANKER → RESEARCH COORDINATOR (Agent evaluates results) =====
+    
+    # Ranker always goes to research coordinator for intelligent evaluation
+    graph.add_edge("ranker", "research_coordinator")
+    
+    # ===== RESEARCH COORDINATOR (Intelligent decision-making) =====
+    
+    def route_from_coordinator(state: ResearchState) -> Literal["refine_query", "save_to_context", "synthesis", "rag_response"]:
+        """Route based on coordinator's intelligent decision"""
+        decision = state.get("coordinator_decision", "proceed")
+        iteration = state.get("search_iteration", 0)
+        
+        if decision == "refine_query" and iteration < settings.max_search_iterations:
+            return "refine_query"  # Coordinator says refine and retry
+        elif decision == "proceed" or decision == "expand_search":
+            return "save_to_context"  # Good enough, save and proceed
+        else:
+            # Default: proceed to synthesis
+            return "save_to_context"
     
     graph.add_conditional_edges(
-        "ranker",
-        route_from_ranker,
+        "research_coordinator",
+        route_from_coordinator,
         {
             "refine_query": "refine_query",
             "save_to_context": "save_to_context",
