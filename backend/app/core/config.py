@@ -40,6 +40,10 @@ class Settings(BaseSettings):
     use_ollama_for_ranking: bool = True  # Ranking -> Ollama (was False)
     use_gemini_for_vision: bool = True   # Vision -> Gemini (Keep True)
     
+    # Chain-of-Thought Settings
+    enable_cot_reasoning: bool = False   # Enable explicit Chain-of-Thought prompting
+    show_thinking_to_user: bool = False  # Stream thinking process to UI (if CoT enabled)
+    
     # Application
     app_env: str = "development"
     debug: bool = True

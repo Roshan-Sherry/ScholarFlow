@@ -120,9 +120,9 @@ def search_all_sources(
         
     except Exception as e:
         logger.error(f"Error in ArXiv search: {e}", exc_info=True)
-        # Fallback to mock if real search fails
-        logger.warning("Falling back to mock results due to error")
-        return _get_mock_papers()
+        # FIXED: Don't return mock papers in production - return empty with proper error
+        logger.error("ArXiv search failed. Returning empty results.")
+        return []  # Empty list allows proper error handling upstream
     
     # Deduplicate by title (case-insensitive)
     seen_titles = set()

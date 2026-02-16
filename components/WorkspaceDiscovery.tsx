@@ -123,28 +123,21 @@ export const WorkspaceDiscovery: React.FC<WorkspaceDiscoveryProps> = ({
                 selected_paper_ids: Array.from(selectedContextIds),
                 lab_asset_ids: []
             }, (chunk) => {
-                // Text chunks
-                accumulatedAnswer += chunk;
+                // Text chunks - this is the formal written content
+                accumulatedAnswer = chunk;  // Reset to full chunk (not append)
                 updateTurn(agentTurnId, {
                     status: 'synthesizing',
                     answer: accumulatedAnswer
                 });
             }, (fullText) => {
-                // Complete
+                // Complete - full written content
                 updateTurn(agentTurnId, {
                     status: 'completed',
                     answer: fullText
                 });
-
-                // Trigger Avatar to speak the answer
-                // Clean up markdown? For now, the Avatar SDK usually handles raw text okay-ish.
-                // Or we can rely on the backend to send a "synthesis" event, but here we have the full text.
-                if (fullText) {
-                    setAvatarMessageToSpeak(fullText);
-                }
-
+                // Don't speak full text - we already spoke the narration
             }, async (papers) => {
-                // NEW: Papers found callback - display discovered papers
+                // Papers found callback - display discovered papers
                 updateTurn(agentTurnId, {
                     sources: papers
                 });
@@ -167,14 +160,18 @@ export const WorkspaceDiscovery: React.FC<WorkspaceDiscoveryProps> = ({
                         console.log('Added paper to library:', paper.title);
                     } catch (error) {
                         console.warn('Failed to add paper to library:', paper.title, error);
-                        // Continue with other papers even if one fails
                     }
                 }
             }, (phase, message) => {
-                // NEW: Status update callback for avatar narration
-                // Only trigger avatar if it's active (non-blocking)
+                // Status update callback - fallback if no narration
                 if (setAvatarMessageToSpeak) {
                     setAvatarMessageToSpeak(message);
+                }
+            }, (narration) => {
+                // NEW: Narration callback - avatar speaks this conversational text
+                console.log('🎤 Avatar narration:', narration);
+                if (setAvatarMessageToSpeak) {
+                    setAvatarMessageToSpeak(narration);
                 }
             });
 

@@ -20,7 +20,8 @@ export function useStreamingChat() {
       onTextChunk?: (text: string) => void,
       onComplete?: (fullText: string) => void,
       onPapersFound?: (papers: any[]) => void,
-      onStatusUpdate?: (phase: string, message: string) => void  // NEW: For avatar narration
+      onStatusUpdate?: (phase: string, message: string) => void,  // For avatar status
+      onNarration?: (narration: string) => void  // NEW: For avatar narration
     ) => {
       setIsStreaming(true);
       setStoreStreaming(true);
@@ -28,6 +29,7 @@ export function useStreamingChat() {
       setError(null);
 
       let accumulatedText = '';
+      let hasReceivedNarration = false;
 
       try {
         for await (const event of streamChatWorkflow(payload)) {
@@ -44,9 +46,25 @@ export function useStreamingChat() {
           } else if (event.type === 'found') {
              addAgentLog('System', `Found ${event.count} relevant papers.`, 'success');
              // NEW: Pass papers to component for display
+             // @ts-ignore - papers property from backend
              if (onPapersFound && event.papers) {
+               // @ts-ignore
                onPapersFound(event.papers);
              }
+          } else if (event.type === 'thinking' && event.data) {
+             // NEW: Chain-of-Thought reasoning - show model's thinking process
+             console.log('🧠 Thinking event received:', event.data);
+             // Optionally display thinking to user (collapsible section, debug output, etc.)
+             addAgentLog('Thought', `Model reasoning: ${event.data.substring(0, 100)}...`, 'info');
+          } else if (event.type === 'narration' && event.data) {
+             // NEW: Handle narration event - avatar speaks this
+             console.log('📢 Narration event received:', event.data);
+             hasReceivedNarration = true;
+             if (onNarration) {
+               onNarration(event.data);
+             }
+             // Also add to logs as avatar message
+             addAgentLog('Avatar', event.data, 'info');
           } else if (event.type === 'analyzed') {
              // Optional: log or just ignore, the 'thought' log covers the details
           } else if (event.type === 'text' && event.data) {
@@ -57,13 +75,15 @@ export function useStreamingChat() {
           } else if (event.type === 'text_chunk' && event.data) {
             accumulatedText += event.data;
             if (onTextChunk) onTextChunk(accumulatedText);
+          // @ts-ignore - status event has phase and message properties from backend
           } else if (event.type === 'status' && event.phase && event.message) {
-             // NEW: Handle status events for avatar narration (analyzing, synthesizing)
-             // This is optional - if no handler provided, just log it
-             addAgentLog('Avatar', event.message, 'info');
-             // @ts-ignore - onStatusUpdate is optional callback
+             // Handle status events for avatar narration (analyzing, synthesizing)
+             // This is the phase message (fallback if no narration event)
+             if (!hasReceivedNarration) {
+               addAgentLog('Avatar', event.message, 'info');
+             }
              if (onStatusUpdate) {
-               // @ts-ignore
+               // @ts-ignore - phase property from backend
                onStatusUpdate(event.phase, event.message);
              }
            } else if (event.type === 'complete') {

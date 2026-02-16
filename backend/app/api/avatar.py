@@ -147,7 +147,8 @@ async def avatar_chat_stream(
                         section = draft.get("section")
                         if section in ["Response", "Research Response"] and draft.get("content"):
                              if draft.get("status") in ["completed", "grounded"] or node_name == "rag_response":
-                                 text_to_speak = draft["content"]
+                                 # PRIORITIZE NARRATION for avatar speech
+                                 text_to_speak = draft.get("narration") or draft["content"]
 
                     # Check for synthesis
                     elif "synthesis_summary" in state_update:
@@ -155,8 +156,8 @@ async def avatar_chat_stream(
 
                     # Emit content if found
                     if text_to_speak:
-                        # Clean up markdown for speech if needed (simple check)
-                        # but Anam might handle text okay.
+                        # For avatar, speak the narration (conversational)
+                        # But also include the full content as data if frontend needs it
                         yield json.dumps({"content": text_to_speak}) + "\n"
             # If no content was yielded (e.g. just a search step), maybe say something?
             # yielded locally.

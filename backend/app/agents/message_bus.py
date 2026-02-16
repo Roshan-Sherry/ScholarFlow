@@ -328,5 +328,6 @@ class MessageTopics:
     # Workflow control
     WORKFLOW_PAUSED = "workflow_paused"
     WORKFLOW_RESUMED = "workflow_resumed"
+    AGENT_DECISION = "agent_decision"  # NEW: For coordinator/specialist decisions
     AGENT_STUCK = "agent_stuck"
     REROUTE_NEEDED = "reroute_needed"

@@ -2,11 +2,16 @@
 
 This module ensures ALL responses are grounded in actual found papers,
 with proper citations and no hallucination.
+
+Supports Chain-of-Thought (CoT) reasoning when enabled in config.
 """
 
 from typing import List, Dict, Optional, AsyncIterator
 from dataclasses import dataclass
 import logging
+import re
+
+from app.core.config import settings
 
 logger = logging.getLogger(__name__)
 
@@ -117,56 +122,149 @@ def format_citations_reference(citations: List[SourcedCitation]) -> str:
     return "\n".join(lines)
 
 
-# RAG-Grounded Prompt Templates
-RAG_RESEARCH_PROMPT = """You are ScholarMate, a research co-author (PhD level).
-We are working together on a research project. Your goal is to help me synthesize findings from our library into a coherent discussion.
+# ===== UTILITY: Parse Chain-of-Thought outputs =====
 
-## User Question
+def parse_cot_response(response: str) -> Dict[str, str]:
+    """Parse response with optional <thinking> tags and ---NARRATION--- / ---CONTENT--- markers
+    
+    Handles multiple marker variations:
+    - ---NARRATION--- / ---CONTENT--- / ---END---
+    - NARRATION / CONTENT markers
+    - Natural section breaks
+    
+    Returns dict with keys: thinking, narration, content
+    Falls back gracefully if tags are missing.
+    """
+    result = {
+        "thinking": "",
+        "narration": "",
+        "content": ""
+    }
+    
+    # Extract thinking (if present)
+    thinking_match = re.search(r'<thinking>(.*?)</thinking>', response, re.DOTALL | re.IGNORECASE)
+    if thinking_match:
+        result["thinking"] = thinking_match.group(1).strip()
+        # Remove thinking from response for further parsing
+        response = re.sub(r'<thinking>.*?</thinking>', '', response, flags=re.DOTALL | re.IGNORECASE)
+    
+    # Try parsing with strict markers first: ---NARRATION--- / ---CONTENT---
+    if "---NARRATION---" in response and "---CONTENT---" in response:
+        parts = response.split("---NARRATION---")
+        if len(parts) > 1:
+            rest = parts[1].split("---CONTENT---")
+            if len(rest) > 1:
+                result["narration"] = rest[0].strip()
+                result["content"] = rest[1].split("---END---")[0].strip()
+                return result
+    
+    # Try parsing with looser markers: "NARRATION" / "CONTENT" (with newlines)
+    narration_match = re.search(
+        r'(?:###?\s+)?(?:\*\*)?(?:AVATAR\s+)?NARRATION(?:\*\*)?[:\s]+(.*?)(?=(?:###?\s+)?(?:\*\*)?CONTENT|\Z)',
+        response,
+        re.DOTALL | re.IGNORECASE
+    )
+    content_match = re.search(
+        r'(?:###?\s+)?(?:\*\*)?CONTENT(?:\*\*)?[:\s]+(.*?)(?=##|References:|\Z)',
+        response,
+        re.DOTALL | re.IGNORECASE
+    )
+    
+    if narration_match:
+        result["narration"] = narration_match.group(1).strip()
+    
+    if content_match:
+        result["content"] = content_match.group(1).strip()
+    
+    # Fallback: if we only got partial parsing, try to intelligently split
+    if not result["narration"] and not result["content"]:
+        # Last resort: just use entire response
+        result["content"] = response.strip()
+        result["narration"] = "Here's what I found in the research."
+    elif not result["content"] and result["narration"]:
+        # If only got narration, rest is content
+        result["content"] = response.replace(result["narration"], "").strip()
+    elif not result["narration"] and result["content"]:
+        # If only got content, use first 2 sentences as narration
+        sentences = re.split(r'(?<=[.!?])\s+', result["content"][:200])
+        result["narration"] = ". ".join(sentences[:2]) + "."
+    
+    return result
+
+
+# RAG-Grounded Prompt Templates (Dual Output: Narration + Written Content)
+# These prompts work with or without CoT - the model will add <thinking> if trained to do so
+RAG_RESEARCH_PROMPT = """You are my research co-author. I need you to help me understand this research question by analyzing the papers I found.
+
+## My Question:
 {query}
 
-## Our Research Materials (Context Shelf)
+## Papers I Found:
 {paper_context}
 
-## Previous Conversation Context (Unified Memory)
+## Previous Context:
 {research_context}
 
-## Instructions
-1. **Adopt a Co-Author Persona**: Speak as a peer. Use "We found...", "Our sources suggest...", "It appears that...", or "We should consider...". Avoid robotic phrases like "The provided text says".
-2. **Synthesize, Don't List**: We are writing a paper, not a list of facts. Build an argument based on the evidence.
-3. **Cite Everything**: Use [1], [2] to reference specific papers.
-4. **Be Critical**: Explicitly highlight contradictions or gaps in *our* current sources. If the papers don't cover the topic, say "Our current sources don't address this, but we might look for..."
-5. **Suggest Next Steps**: If appropriate, recommend what we should investigate next.
+## YOUR TASK: Generate TWO separate outputs with CLEAR SEPARATION
 
-## Response Format
-- **Discussion**: A clear, synthesized answer or argument.
-- **Detailed Analysis**: Evidence-based discussion citing specific claims [1].
-- **References**: List the papers used at the end.
+Output exactly in this format (CRITICAL):
 
-IMPORTANT: Maintain high academic rigor. No hallucination. Write as if drafting a section of our paper.
+## NARRATION
+[Your conversational explanation here - 2-4 sentences, natural speech like talking to colleague]
+
+Write this like you're explaining to someone over coffee:
+- First person: "I found...", "Looking at these papers...", "Here's what's interesting..."
+- Conversational tone: Natural, engaging, enthusiastic when appropriate
+- Be honest: "I'm not seeing much about X in these papers..."
+- Be excited: "Oh, this is fascinating - [1] shows..."
+- Keep it flowing: 2-4 sentences max introducing the main insight
+
+## CONTENT
+[Your formal written synthesis here - well-structured, cited, professional]
+
+Write this as proper research summary:
+- Formal academic language but clear
+- Well-organized paragraphs with topic sentences
+- All claims cited [1], [2], etc.
+- Evidence-based and objective
+- Note any disagreements or gaps between papers
+- Start with key finding, then supporting details
+
+## Critical Rules:
+1. ONLY use information from provided papers - NO fabrication
+2. Every claim must have citation [1], [2], [3], etc.
+3. If papers disagree, mention it clearly
+4. If information is missing, say so and suggest next steps
+5. Keep NARRATION and CONTENT completely separate
+
+Now generate your response:
 """
 
 
-RAG_SUMMARY_PROMPT = """Summarize the following research papers for the user. Use ONLY information from these papers.
+RAG_SUMMARY_PROMPT = """Summarize these papers for me with clear separation between spoken and written formats.
 
-## User Request
+## Question:
 {query}
 
-## Papers to Summarize
+## Papers:
 {paper_context}
 
-## Instructions
-1. Create a cohesive summary connecting the papers' key findings
-2. Use [1], [2] citations throughout
-3. Highlight areas of agreement and disagreement between papers
-4. Note any research gaps identified
+## Generate these two sections with CLEAR SEPARATION:
 
-## Output
-- Executive Summary (2-3 sentences)
-- Key Findings from each paper
-- Synthesis and Connections
-- Research Gaps
+## NARRATION
+[2-3 sentences introducing what you found - natural, conversational]
 
-IMPORTANT: Cite every claim. Do not add external knowledge.
+Example style: "Alright, I went through these papers and here's the interesting part - they all agree on X, but there's a debate about Y. Let me break down what each one says..."
+
+## CONTENT
+[Structured summary with findings, points of agreement/disagreement, gaps - all cited [1], [2], etc.]
+
+Rules:
+- Use ONLY information from provided papers
+- Every claim must be cited [1], [2], [3]
+- Keep narration and content completely separate
+- Note where papers agree or disagree
+- Identify research gaps
 """
 
 
@@ -181,7 +279,9 @@ async def generate_grounded_response(
     Generate a response grounded in the provided papers.
     
     Returns dict with:
-        - response: The generated text
+        - narration: What the avatar says (conversational)
+        - content: Written content (formal)
+        - response: Full response (for backwards compatibility)
         - citations: List of SourcedCitation objects
         - papers_used: List of paper IDs that should be saved
     """
@@ -204,21 +304,43 @@ async def generate_grounded_response(
     if not response:
         logger.warning(f"AI Client returned empty response for query: {query}")
         return {
+            "thinking": "",
+            "narration": "I apologize, but I was unable to generate a response at this time. Please try again.",
+            "content": "",
             "response": "I apologize, but I was unable to generate a response at this time. Please try again.",
             "citations": citations,
             "papers_used": [],
             "total_papers_found": len(papers)
         }
 
+    # Parse response (handles both CoT with <thinking> and standard format)
+    parsed = parse_cot_response(response)
+    thinking = parsed["thinking"]
+    narration = parsed["narration"]
+    content = parsed["content"]
     
-    # Append reference list
+    # Log parsing results for debugging
+    logger.info(f"Response parsing: narration_length={len(narration)}, content_length={len(content)}, has_thinking={bool(thinking)}")
+    if narration:
+        logger.debug(f"Extracted narration: {narration[:150]}...")
+    else:
+        logger.warning(f"No narration extracted. Response length: {len(response)}. First 200 chars: {response[:200]}")
+    
+    # Log thinking if present (for debugging/analysis)
+    if thinking:
+        logger.info(f"Model reasoning: {thinking[:200]}...")  # Log first 200 chars
+    
+    # Append reference list to content only
     references = format_citations_reference(citations)
-    full_response = response + references
+    full_content = content + references
     
-    # Extract which papers were actually used (by looking for [1], [2] in response)
+    # Extract which papers were actually used (by looking for [1], [2] in content)
     papers_used = []
+    
+    # Include thinking in return value (can be logged or shown to user)
+    # Frontend can decide whether to display it based on settings.show_thinking_to_user
     for c in citations:
-        if f"[{c.index}]" in response:
+        if f"[{c.index}]" in content:
             papers_used.append({
                 "title": c.title,
                 "authors": c.authors,
@@ -227,7 +349,10 @@ async def generate_grounded_response(
             })
     
     return {
-        "response": full_response,
+        "thinking": thinking,      # Chain-of-Thought reasoning (may be empty)
+        "narration": narration,    # What avatar says
+        "content": full_content,   # What's displayed
+        "response": full_content,  # Backwards compatibility
         "citations": citations,
         "papers_used": papers_used,
         "total_papers_found": len(papers)

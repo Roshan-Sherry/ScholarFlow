@@ -19,6 +19,7 @@ from app.agents.nodes import (
     lab_analyst_node,
     writer_node,
     reviewer_node,
+    analyzing_preparation_node,
     rag_response_node
 )
 from app.agents.specialists import (
@@ -588,6 +589,7 @@ def create_research_graph():
     graph.add_node("lab_analyst", lab_analyst_node)
     
     # RAG Response (grounded answers from papers)
+    graph.add_node("analyzing", analyzing_preparation_node)  # Shows thinking status
     graph.add_node("rag_response", rag_response_node)
     
     # Drafting nodes
@@ -661,7 +663,7 @@ def create_research_graph():
     
     # ===== RESEARCH COORDINATOR (Intelligent decision-making) =====
     
-    def route_from_coordinator(state: ResearchState) -> Literal["refine_query", "save_to_context", "synthesis", "rag_response"]:
+    def route_from_coordinator(state: ResearchState) -> Literal["refine_query", "save_to_context", "synthesis", "analyzing"]:
         """Route based on coordinator's intelligent decision"""
         decision = state.get("coordinator_decision", "proceed")
         iteration = state.get("search_iteration", 0)
@@ -669,12 +671,12 @@ def create_research_graph():
         if decision == "refine_query" and iteration < settings.max_search_iterations:
             return "refine_query"  # Coordinator says refine and retry
         elif decision == "proceed" or decision == "expand_search":
-            return "rag_response"  # Proceed to generate grounded answer
+            return "analyzing"  # Show thinking status before generating answer
         elif decision == "rag_response":
-            return "rag_response"
+            return "analyzing"  # Show thinking status
         else:
-            # Default: proceed to synthesis
-            return "rag_response"
+            # Default: show thinking status
+            return "analyzing"
     
     graph.add_conditional_edges(
         "research_coordinator",
@@ -683,9 +685,12 @@ def create_research_graph():
             "refine_query": "refine_query",
             "save_to_context": "save_to_context",
             "synthesis": "synthesis",
-            "rag_response": "rag_response"
+            "analyzing": "analyzing"
         }
     )
+    
+    # Analyzing always proceeds to rag_response
+    graph.add_edge("analyzing", "rag_response")
     
     # refine_query loops back to search
     graph.add_edge("refine_query", "search")

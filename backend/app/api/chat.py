@@ -118,19 +118,47 @@ async def stream_workflow(
                     # If draft is being generated, stream content
                     current_draft = state_update.get("current_draft", {})
                     if current_draft and current_draft.get("content"):
-                        # NEW: Emit "synthesizing" status before answer
+                        content = current_draft["content"]
+                        narration = current_draft.get("narration")  # Avatar's spoken words
+                        thinking = current_draft.get("thinking")  # Chain-of-Thought reasoning (optional)
+                        final_response = content # Update final response
+                        logger.info(f"Captured draft content: {len(content)} chars, narration: {len(narration) if narration else 0} chars, thinking: {len(thinking) if thinking else 0} chars")
+                        
+                        if not narration:
+                            logger.warning(f"⚠️  No narration extracted! Draft keys: {current_draft.keys()}")
+                        
+                        # OPTIONAL: Stream thinking process if enabled and present
+                        from app.core.config import settings
+                        if thinking and settings.show_thinking_to_user:
+                            thinking_event = {
+                                "type": "thinking",
+                                "data": thinking
+                            }
+                            yield f"data: {json.dumps(thinking_event)}\n\n"
+                            await asyncio.sleep(0.2)  # Brief pause after thinking
+                        
+                        # FIRST: Stream avatar narration if present
+                        if narration:
+                            # Emit narration event for avatar to speak
+                            narration_event = {
+                                "type": "narration",
+                                "data": narration
+                            }
+                            logger.debug(f"📢 Streaming narration event: {narration[:100]}...")
+                            yield f"data: {json.dumps(narration_event)}\n\n"
+                            await asyncio.sleep(0.3)  # Brief pause before content
+                        else:
+                            logger.warning("⚠️  Narration is empty, not streaming narration event")
+                        
+                        # SECOND: Emit "synthesizing" status AFTER narration
                         synth_event = {
                             "type": "status",
                             "phase": "synthesizing",
-                            "message": "Based on what I found, here's the synthesis..."
+                            "message": narration if narration else "Based on what I found, here's the synthesis..."
                         }
                         yield f"data: {json.dumps(synth_event)}\n\n"
                         
-                        content = current_draft["content"]
-                        final_response = content # Update final response
-                        logger.info(f"Captured draft content: {len(content)} chars")
-                        
-                        # Stream word-by-word for ChatGPT-like experience
+                        # THIRD: Stream written content word-by-word
                         words = content.split()
                         for i, word in enumerate(words):
                             chunk = word if i == 0 else f" {word}"

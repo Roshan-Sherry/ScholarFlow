@@ -207,11 +207,14 @@ export const SidebarRight: React.FC<SidebarRightProps> = ({
                     selected_paper_ids: paperIds,
                     lab_asset_ids: assetIds
                 },
-                    undefined, // We don't need intermediate chunks for chat UI if we trust the store/logs? 
-                    // Actually getting the chunks to display in CHAT UI is important.
+                    undefined, // onTextChunk
                     (fullText) => {
                         setChatMessages(prev => [...prev, { role: 'agent', text: fullText }]);
-                    });
+                    },
+                    undefined, // onPapersFound
+                    undefined, // onStatusUpdate  
+                    undefined  // onNarration
+                );
             } catch (e) {
                 console.error(e);
             }
@@ -232,10 +235,14 @@ export const SidebarRight: React.FC<SidebarRightProps> = ({
                     selected_paper_ids: [activePaper],
                     lab_asset_ids: []
                 },
-                    undefined,
+                    undefined,  // onTextChunk
                     (fullText) => {
                         setPdfChatMessages(prev => [...prev, { role: 'agent', text: fullText }]);
-                    });
+                    },
+                    undefined,  // onPapersFound
+                    undefined,  // onStatusUpdate
+                    undefined   // onNarration
+                );
             } catch (e) {
                 console.error(e);
             }
@@ -380,12 +387,15 @@ export const SidebarRight: React.FC<SidebarRightProps> = ({
                 selected_paper_ids: [],
                 lab_asset_ids: []
             }, (chunk) => {
-                // We might not get chunks for chat stream in the same way, but let's assume valid
-                // Actually streamChat hook callback is (chunk) => ... 
-                // Wait, previous usage: (chunk) handling
+                // Text chunks for streaming rewrite
+                accumulated = chunk;
             }, (fullText) => {
                 setRewriteSuggestion(fullText);
-            });
+            },
+            undefined,  // onPapersFound
+            undefined,  // onStatusUpdate
+            undefined   // onNarration
+            );
         } catch (e) {
             console.error(e);
         } finally {

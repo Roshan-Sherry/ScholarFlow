@@ -3,6 +3,7 @@
 from typing import Dict
 from langchain_core.messages import HumanMessage, AIMessage
 import httpx
+import logging
 from sqlalchemy.orm import Session
 
 from app.agents.state import ResearchState
@@ -12,6 +13,8 @@ from app.models.database import LibraryItem, LabAsset, get_db
 from app.services.vector_store import vector_store
 from app.services.rag_grounding import generate_grounded_response, format_paper_context
 from app.agents.specialists import get_memory_agent, get_citation_agent
+
+logger = logging.getLogger(__name__)
 
 
 # ===== CLARIFIER NODE =====
@@ -215,8 +218,9 @@ async def search_node(state: ResearchState) -> Dict:
         
         found_papers = list(unique_papers.values())[:10]  # Limit to 10 total
         
-        # === AUTO-SAVE TO PROJECT LIBRARY ===
+        # === AUTO-SAVE TO PROJECT LIBRARY (FIXED: Better Error Handling) ===
         project_id = state.get("project_id")
+        saved_count = 0
         if project_id:
             try:
                 db = next(get_db())
@@ -239,12 +243,36 @@ async def search_node(state: ResearchState) -> Dict:
                             is_selected_for_context=False  # Auto-added but not auto-selected for chat context
                         )
                         db.add(new_item)
-                        # Add the DB ID to the paper object in state so frontend can link it
-                        # But wait, we need to commit first to get ID
+                        saved_count += 1
                 db.commit()
                 db.close()
+                logger.info(f"✓ Auto-saved {saved_count}/{len(found_papers)} new papers to library")
             except Exception as save_err:
-                print(f"Error auto-saving papers: {save_err}") # Non-blocking
+                logger.error(f"✗ Error auto-saving papers to library: {save_err}", exc_info=True)
+                # Non-blocking, but now properly logged
+        
+        # Check if no papers found and provide helpful feedback
+        if len(found_papers) == 0:
+            logger.warning(f"No papers found for query: '{query}'")
+            return {
+                "found_papers": [],
+                "search_iteration": iteration + 1,
+                "logs": [
+                    log_entry,
+                    thought_log,
+                    {
+                        "step": "search",
+                        "source": "MultiSourceSearch",
+                        "message": "⚠ No papers found. Try different keywords or broader terms.",
+                        "status": "warning",
+                        "metadata": {
+                            "count": 0,
+                            "optimized_query": optimized_query,
+                            "suggestion": "Try rephrasing with different terminology or broader search terms"
+                        }
+                    }
+                ]
+            }
         
         return {
             "found_papers": found_papers,
@@ -255,10 +283,11 @@ async def search_node(state: ResearchState) -> Dict:
                 {
                     "step": "search",
                     "source": "MultiSourceSearch",
-                    "message": f"✓ Found {len(found_papers)} papers and saved to library",
+                    "message": f"✓ Found {len(found_papers)} papers ({saved_count} new, {len(found_papers) - saved_count} existing)",
                     "status": "completed",
                     "metadata": {
                         "count": len(found_papers),
+                        "saved_count": saved_count,
                         "optimized_query": optimized_query
                     }
                 }
@@ -281,10 +310,11 @@ async def search_node(state: ResearchState) -> Dict:
         }
 
 
-# ===== RANKER NODE (Discovery Loop Decision Point) =====
+# ===== RANKER NODE (Discovery Loop Decision Point - OPTIMIZED: Batch Scoring) =====
 
 async def ranker_node(state: ResearchState) -> Dict:
-    """Score papers for relevance using AI"""
+    """Score papers for relevance using AI - OPTIMIZED with batch scoring"""
+    import time
     
     query = state["query"]
     found_papers = state["found_papers"]
@@ -296,18 +326,75 @@ async def ranker_node(state: ResearchState) -> Dict:
         "status": "processing"
     }
     
-    ranked_papers = []
+    if not found_papers:
+        return {
+            "ranked_papers": [],
+            "logs": [log_entry, {
+                "step": "rank",
+                "source": "Ranker",
+                "message": "No papers to rank",
+                "status": "completed"
+            }]
+        }
     
-    for paper in found_papers:
-        # Score using AI
-        score = await ai_client.score_paper_relevance(
-            paper["title"],
-            paper["abstract"],
-            query
-        )
+    ranked_papers = []
+    start_time = time.time()
+    
+    # OPTIMIZATION: Batch score all papers in one LLM call (10x faster!)
+    try:
+        # Build single prompt with all papers
+        papers_text = ""
+        for i, paper in enumerate(found_papers, 1):
+            title = paper.get("title", "Unknown")
+            abstract = paper.get("abstract", paper.get("summary", "No abstract"))[:300]  # Limit length
+            papers_text += f"{i}. TITLE: {title}\n   ABSTRACT: {abstract}\n\n"
         
-        paper["relevance_score"] = score
-        ranked_papers.append(paper)
+        batch_prompt = f"""Rate the relevance of these {len(found_papers)} papers to the query on a scale of 0.0 to 1.0.
+
+QUERY: "{query}"
+
+PAPERS:
+{papers_text}
+
+Return ONLY the scores as a comma-separated list (e.g., "0.85, 0.72, 0.91, ...").
+Return exactly {len(found_papers)} scores in the same order."""
+
+        # Get all scores at once
+        result = await ai_client.generate_text(batch_prompt, temperature=0.2, use_flash=False)
+        
+        # Parse scores
+        score_strings = result.strip().split(',')
+        scores = []
+        for s in score_strings:
+            try:
+                score = float(s.strip())
+                scores.append(max(0.0, min(1.0, score)))  # Clamp to [0, 1]
+            except ValueError:
+                scores.append(0.5)  # Default if parsing fails
+        
+        # Ensure we have enough scores (pad with 0.5 if needed)
+        while len(scores) < len(found_papers):
+            scores.append(0.5)
+        
+        # Assign scores to papers
+        for paper, score in zip(found_papers, scores[:len(found_papers)]):
+            paper["relevance_score"] = score
+            ranked_papers.append(paper)
+        
+        elapsed = time.time() - start_time
+        logger.info(f"⚡ Batch scored {len(ranked_papers)} papers in {elapsed:.2f}s")
+        
+    except Exception as batch_err:
+        # Fallback to individual scoring if batch fails
+        logger.warning(f"Batch scoring failed: {batch_err}. Falling back to individual scoring.")
+        for paper in found_papers:
+            score = await ai_client.score_paper_relevance(
+                paper.get("title", ""),
+                paper.get("abstract", paper.get("summary", "")),
+                query
+            )
+            paper["relevance_score"] = score
+            ranked_papers.append(paper)
     
     # Sort by relevance
     ranked_papers.sort(key=lambda p: p["relevance_score"], reverse=True)
@@ -719,6 +806,41 @@ Respond with EITHER:
     }
 
 
+# ===== ANALYZING PREPARATION NODE (Shows Thinking Status) =====
+
+async def analyzing_preparation_node(state: ResearchState) -> Dict:
+    """
+    Show user that we're analyzing papers before the blocking LLM call.
+    This creates a better UX by providing immediate feedback.
+    """
+    found_papers = state.get("found_papers", [])
+    ranked_papers = state.get("ranked_papers", [])
+    selected_paper_ids = state.get("selected_paper_ids", [])
+    
+    # Count papers we'll analyze
+    paper_count = 0
+    if selected_paper_ids:
+        paper_count = len(selected_paper_ids)
+        message = f"📚 Reading through {paper_count} papers from your library..."
+    elif ranked_papers:
+        paper_count = min(len(ranked_papers), 8)
+        message = f"🔍 Analyzing top {paper_count} ranked papers..."
+    elif found_papers:
+        paper_count = min(len(found_papers), 8)
+        message = f"🔍 Processing {paper_count} papers..."
+    else:
+        message = "🤔 Preparing to generate answer..."
+    
+    return {
+        "logs": [{
+            "step": "analyzing",
+            "source": "ResearchAssistant",
+            "message": message,
+            "status": "processing"
+        }]
+    }
+
+
 # ===== RAG RESPONSE NODE (Grounded Answer Generation) =====
 
 async def rag_response_node(state: ResearchState) -> Dict:
@@ -835,20 +957,20 @@ async def rag_response_node(state: ResearchState) -> Dict:
                 "status": "warning"
             })
     
-    # ===== STEP 2: DECIDE DATA SOURCE =====
+    # ===== STEP 2: DECIDE DATA SOURCE (FIXED: Smart Fallback) =====
     if library_papers_info:
-        # FORCE LIBRARY USE: If we found relevant chunks, strictly use them
+        # Use library papers first (priority)
         papers_to_use = library_papers_info
         source_type = "library"
         logs.append({
             "step": "rag_response",
             "source": "ResearchAssistant",
-            "message": "📖 Answering from YOUR library papers (Shelf Priority Enforced)",
+            "message": "📖 Answering from YOUR library papers",
             "status": "processing"
         })
-    elif selected_paper_ids:
-        # STRICT FALLBACK: User selected papers but we found nothing?
-        # Don't switch to ArXiv silently. Be honest.
+    elif selected_paper_ids and not (ranked_papers or found_papers):
+        # User selected papers, found nothing in library, AND no search was performed
+        # Only then suggest they try searching externally
         return {
             "current_draft": {
                 "section": "Response",
@@ -868,15 +990,35 @@ async def rag_response_node(state: ResearchState) -> Dict:
             }]
         }
     else:
-        # Fallback to ArXiv/Scholar results (only if NO shelf papers selected)
+        # SMART FALLBACK: Use search results from ArXiv/Scholar
+        # This happens if:
+        # - No library papers selected, OR
+        # - Library papers selected but didn't match (fallback to search results)
         papers_to_use = ranked_papers if ranked_papers else found_papers
         source_type = "external"
         
+        # FORMAT EXTERNAL PAPERS: Ensure they have proper structure for RAG
+        # External papers only have abstracts, not PDF chunks, but we can still use them
+        formatted_external = []
+        for paper in papers_to_use[:8]:  # Use top 8 papers
+            formatted_external.append({
+                "title": paper.get("title", "Unknown"),
+                "authors": paper.get("authors", []),
+                "year": paper.get("year"),
+                "text": paper.get("abstract") or paper.get("summary", ""),  # Use abstract as text
+                "source": paper.get("source", "ArXiv"),
+                "url": paper.get("url") or paper.get("pdf_url"),
+                "paperId": paper.get("paperId") or paper.get("id"),
+                "relevance_score": paper.get("relevance_score", 0.0)
+            })
+        papers_to_use = formatted_external
+        
         if papers_to_use:
+            fallback_message = "🔍 Using papers from recent search" if selected_paper_ids else f"🔍 Using {len(papers_to_use)} papers from ArXiv/Scholar"
             logs.append({
                 "step": "rag_response",
                 "source": "ResearchAssistant",
-                "message": f"🔍 Using {len(papers_to_use)} papers from ArXiv/Scholar",
+                "message": fallback_message,
                 "status": "processing"
             })
     
@@ -905,6 +1047,7 @@ Would you like me to try a different search?""",
         }
     
     # Generate grounded response using the found papers
+    # NOTE: Thinking status is now shown by analyzing_preparation_node
     try:
         result = await generate_grounded_response(
             query=query,
@@ -914,17 +1057,25 @@ Would you like me to try a different search?""",
             research_context="\n\n".join(memory_context) if memory_context else None
         )
         
-        response_content = result["response"]
+        response_content = result["content"]  # Formal written content
+        narration = result["narration"]  # Avatar's spoken words
+        thinking = result.get("thinking", "")  # Chain-of-Thought reasoning (optional)
         papers_used = result["papers_used"]
         
-        # Add source indicator to response
-        source_indicator = "📚 *Answered from your library*" if source_type == "library" else "🔍 *Answered from ArXiv/Scholar*"
-        response_with_source = f"{source_indicator}\n\n{response_content}"
+        # Make response more conversational and clear about source
+        if source_type == "library":
+            intro = "Based on the papers in your library:\n\n"
+        else:
+            intro = "Based on what I found in recent papers:\n\n"
+        
+        response_with_source = f"{intro}{response_content}"
         
         return {
             "current_draft": {
                 "section": "Research Response",
-                "content": response_with_source,
+                "content": response_with_source,  # Written content
+                "narration": narration,  # Spoken narration
+                "thinking": thinking,  # Chain-of-Thought reasoning (optional)
                 "status": "grounded",
                 "source_type": source_type,
                 "papers_used": papers_used,

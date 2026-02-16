@@ -37,10 +37,10 @@ export interface Citation {
 
 export interface AgentLog {
   id: string;
-  source: 'Router' | 'Ranker' | 'Synthesizer' | 'Co-Author' | 'System' | 'Thought';
+  source: 'Router' | 'Ranker' | 'Synthesizer' | 'Co-Author' | 'System' | 'Thought' | 'Avatar' | 'Writer';
   message: string;
   timestamp: Date;
-  status?: 'pending' | 'success' | 'error';
+  status?: 'pending' | 'success' | 'error' | 'info';
   metadata?: any; 
 }
 
