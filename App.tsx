@@ -10,7 +10,7 @@ import { WorkspaceStudio } from './components/WorkspaceStudio';
 import { Dashboard } from './components/Dashboard';
 import { ErrorBoundary } from './components/ErrorBoundary';
 import { ToastContainer } from './components/Toast';
-import { INITIAL_PROJECT_FILES, VIRTUAL_PROJECT_ID } from './constants';
+import { VIRTUAL_PROJECT_ID } from './constants';
 
 import { useAppStore } from './stores/appStore';
 import { useProjectStore } from './stores/projectStore';
@@ -32,9 +32,9 @@ export default function App() {
     } = useAppStore();
 
     const {
-        activeProject, activeFileId, selectedContextIds, historyStack, redoStack,
+        activeProject, activeFileId, paperContent, selectedContextIds, historyStack, redoStack,
         setActiveProject, setActiveFileId, toggleContext, addFile, deleteFile,
-        updateFileContent, updateSection, pushHistory, undo, redo
+        setPaperContent, updateSection, pushHistory, undo, redo
     } = useProjectStore();
 
     const {
@@ -245,20 +245,19 @@ export default function App() {
         deleteFile(fileId);
     };
 
+    // Paper content lives directly in the store — no files[] indirection.
+    const activeFileContent = paperContent;
+
     const handleUpdateFileContent = (newContent: string, saveHistory: boolean = false) => {
-        if (!activeProject || !activeFileId) return;
-
-        if (saveHistory) {
-            pushHistory(activeFileContent);
-        }
-
-        updateFileContent(activeFileId, newContent);
+        if (!activeProject) return;
+        if (saveHistory) pushHistory(activeFileContent);
+        setPaperContent(newContent);
     };
 
     const handleUndo = () => {
         const prevState = undo();
         if (prevState !== null) {
-            updateFileContent(activeFileId, prevState);
+            setPaperContent(prevState);
             addAgentLog('System', 'Undoing last action.', 'success');
         }
     };
@@ -266,7 +265,7 @@ export default function App() {
     const handleRedo = () => {
         const nextState = redo();
         if (nextState !== null) {
-            updateFileContent(activeFileId, nextState);
+            setPaperContent(nextState);
             addAgentLog('System', 'Redoing action.', 'success');
         }
     };
@@ -274,15 +273,10 @@ export default function App() {
     // --- CO-AUTHOR / AGENTIC ACTIONS ---
 
     const handleUpdateSection = (sectionTitle: string, content: string, mode: 'append' | 'replace' = 'append') => {
-        if (!activeProject || !activeFileId) return;
-
-        // Use the store's updateSection which reads the latest state
-        // This prevents race conditions during parallel drafting
-        updateSection(activeFileId, sectionTitle, content, mode);
+        if (!activeProject) return;
+        // Write directly into paperContent — no file lookup needed
+        updateSection(sectionTitle, content, mode);
     };
-
-    const activeFile = activeProject?.files.find(f => f.id === activeFileId) || activeProject?.files[0];
-    const activeFileContent = activeFile?.content || '';
 
     // --- NAVIGATION ACTIONS ---
 
@@ -639,7 +633,7 @@ export default function App() {
                             activeProject={activeProject}
                             content={activeFileContent}
                             onChange={(c) => handleUpdateFileContent(c, false)}
-                            activeFileName={activeFile?.name || 'Untitled'}
+                            activeFileName={activeProject?.title || 'Untitled'}
                             onUndo={handleUndo}
                             onRedo={handleRedo}
                             canUndo={historyStack.length > 0}

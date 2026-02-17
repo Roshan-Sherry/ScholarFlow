@@ -609,7 +609,7 @@ def create_research_graph():
     
     # Add validator node for bibliography
     graph.add_node("validator", lambda state: {"logs": [{"step": "validator", "message": "✓ Citations validated", "status": "completed"}]})
-    graph.add_node("bibliography", lambda state: {"bibliography": state.get("citations_used", {}), "logs": [{"step": "bibliography", "message": "✓ Bibliography generated", "status": "completed"}]})
+    graph.add_node("build_bibliography", lambda state: {"bibliography": state.get("citations_used", {}), "logs": [{"step": "bibliography", "message": "✓ Bibliography generated", "status": "completed"}]})
     
     # ===== CONDITIONAL ENTRY POINT (NEW) =====
     
@@ -742,15 +742,15 @@ def create_research_graph():
         {
             "writer": "writer",         # Back to writing with citations
             "validator": "validator",   # Validate citations
-            "bibliography": "bibliography"  # Generate bibliography
+            "bibliography": "build_bibliography"  # Generate bibliography
         }
     )
-    
+
     # Validator → Writer
     graph.add_edge("validator", "writer")
-    
+
     # Bibliography → Reviewer (after citations done, review)
-    graph.add_edge("bibliography", "reviewer")
+    graph.add_edge("build_bibliography", "reviewer")
     
     # ===== PLANNER (can route to writer, search, or synthesis) =====
     

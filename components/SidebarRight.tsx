@@ -487,13 +487,22 @@ export const SidebarRight: React.FC<SidebarRightProps> = ({
 
     const handleAddSectionToPaper = (section: OutlineSection) => {
         if (!onUpdateSection) return;
-        
-        const content = sectionContent.get(section.id);
+
+        // Primary: use the saved draft content from the sectionContent map
+        // Fallback: pull the section directly from the live file content (handles the case
+        // where the sync effect marked the section 'completed' before setSectionContent ran,
+        // or after a page reload where content was streamed but the map wasn't restored)
+        const content = sectionContent.get(section.id) || getSectionContent(section.title);
+
         if (content) {
             onUpdateSection(section.title, content, 'replace');
+            // Ensure the map is up-to-date so future calls also work
+            if (!sectionContent.get(section.id)) {
+                setSectionContent(prev => new Map(prev).set(section.id, content));
+            }
             if (addAgentLog) addAgentLog('Co-Author', `✓ Re-inserted "${section.title}" to paper`, 'success');
         } else {
-            if (addAgentLog) addAgentLog('Co-Author', `No content to add for "${section.title}"`, 'error');
+            if (addAgentLog) addAgentLog('Co-Author', `No content found for "${section.title}" — try drafting it first`, 'error');
         }
     };
 
@@ -516,7 +525,9 @@ export const SidebarRight: React.FC<SidebarRightProps> = ({
 
     const getSectionContent = (title: string) => {
         if (!activeFileContent) return '';
-        const regex = new RegExp(`## ${title}\\n([\\s\\S]*?)(?=\\n## |$)`);
+        // Escape special regex chars in the title, then match everything until the next ## heading
+        const escapedTitle = title.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
+        const regex = new RegExp(`## ${escapedTitle}\\n((?:(?!\\n## )[\\s\\S])*)`);
         const match = activeFileContent.match(regex);
         return match ? match[1].trim() : '';
     };

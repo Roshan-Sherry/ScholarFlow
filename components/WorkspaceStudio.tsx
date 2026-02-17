@@ -18,166 +18,252 @@ import { saveDraft, loadDraft } from '../lib/api-client';
 // --- CONSTANTS FOR A4 LAYOUT ---
 const A4_W_MM = 210;
 const A4_H_MM = 297;
-const GAP_MM = 10;
-const TOTAL_UNIT_MM = A4_H_MM + GAP_MM;
+const GAP_MM = 10;                          // Visual gap between pages (grey stripe)
+const TOTAL_UNIT_MM = A4_H_MM + GAP_MM;    // 307mm per page unit
+
+// IEEE margins (mm): top 19, bottom 43, sides 13
+const IEEE_MT = 19;
+const IEEE_MB = 43;
+const IEEE_MS = 13;
+const IEEE_BODY_H = A4_H_MM - IEEE_MT - IEEE_MB; // ~235mm printable height per page
+
+// Springer LNCS margins: top 5cm, bottom 2.5cm, sides 2.5cm
+const SPR_MT_MM = 50;
+const SPR_MB_MM = 25;
+const SPR_MS_MM = 25;
+const SPR_BODY_H = A4_H_MM - SPR_MT_MM - SPR_MB_MM; // ~222mm printable height per page
 
 const BASE_STYLES = `
-    @import url('https://fonts.googleapis.com/css2?family=Times+New+Roman&display=swap');
     @import url('https://fonts.googleapis.com/css2?family=Inter:wght@400;600;700&display=swap');
     @import url('https://fonts.googleapis.com/css2?family=JetBrains+Mono:wght@400;500&display=swap');
-    
+
     .paper-viewport {
-        background-color: #525659; /* PDF Viewer Grey */
+        background-color: #525659;
         padding: 40px 0;
         overflow-y: scroll;
         height: 100%;
         scroll-behavior: smooth;
     }
 
+    /*
+     * The canvas is a tall galley strip.
+     * The repeating gradient paints A4 white pages separated by a grey gap stripe,
+     * giving an authentic PDF-viewer look without JavaScript page splitting.
+     */
     .paper-canvas {
         background: white;
-        color: black;
-        box-shadow: 0 4px 15px rgba(0, 0, 0, 0.2);
+        color: #000;
+        box-shadow: 0 4px 20px rgba(0,0,0,0.35);
         box-sizing: border-box;
         margin: 0 auto;
-        transition: transform 0.2s ease-out;
         transform-origin: top center;
-        
-        /* A4 PAGE SIMULATION (Galley Mode) */
-        background-image: linear-gradient(to bottom, 
-            white 0mm, 
-            white ${A4_H_MM}mm,      
-            #525659 ${A4_H_MM}mm,    
-            #525659 ${TOTAL_UNIT_MM}mm 
+        position: relative;
+
+        /* Repeating page background: white page, then grey gap */
+        background-image: linear-gradient(to bottom,
+            white          0mm,
+            white          ${A4_H_MM}mm,
+            #525659        ${A4_H_MM}mm,
+            #525659        ${TOTAL_UNIT_MM}mm
         );
         background-size: 100% ${TOTAL_UNIT_MM}mm;
         background-repeat: repeat-y;
-        
+
         min-height: ${A4_H_MM}mm;
-        position: relative;
+        height: auto;
+        overflow: visible;
     }
-    
-    /* Page Number Styling */
+
+    /* ---- Page number label sits inside the grey gap stripe ---- */
     .page-number-overlay {
         position: absolute;
         left: 0;
         width: 100%;
-        height: 20px;
-        text-align: center;
+        height: ${GAP_MM}mm;
+        display: flex;
+        align-items: center;
+        justify-content: center;
         font-family: 'Times New Roman', serif;
-        font-size: 9pt;
-        color: #666;
+        font-size: 8pt;
+        color: #ccc;
         pointer-events: none;
+        letter-spacing: 0.1em;
     }
-    
+
+    /* ---- Editable blocks ---- */
     .editable-block {
         position: relative;
         border: 1px dashed transparent;
-        transition: all 0.2s;
+        transition: border-color 0.15s, background 0.15s;
         cursor: text;
-        break-inside: avoid; /* Try to keep blocks together */
     }
     .editable-block:hover {
-        border-color: #cbd5e1;
-        background-color: rgba(241, 245, 249, 0.3);
+        border-color: #c7d2fe;
+        background-color: rgba(238,242,255,0.4);
     }
     .editable-block.editing {
         border-color: #6366f1;
-        background-color: #1e1e1e; /* Dark mode editor bg match */
-        box-shadow: 0 0 0 4px rgba(99, 102, 241, 0.3);
+        background-color: #1e1e1e;
+        box-shadow: 0 0 0 4px rgba(99,102,241,0.25);
         z-index: 10;
         padding: 8px;
-        margin: -8px; 
+        margin: -8px;
         border-radius: 4px;
-        break-inside: auto;
         color: #d4d4d4;
+    }
+
+    /* Prevent widows/orphans */
+    .paper-canvas p,
+    .paper-canvas li,
+    .paper-canvas h1,
+    .paper-canvas h2,
+    .paper-canvas h3 {
+        orphans: 3;
+        widows: 3;
     }
 `;
 
-const TEMPLATES: Record<string, { name: string, css: string }> = {
-    IEEE: {
-        name: "IEEE Conference (A4)",
-        css: `
-            .template-IEEE {
-                width: ${A4_W_MM}mm; 
-                /* IEEE A4 Margins: Top 19mm, Bottom 43mm, Sides 13mm */
-                /* We add extra bottom padding to account for the gap simulation if text overflows */
-                padding: 19mm 13mm 19mm 13mm;
-                font-family: 'Times New Roman', Times, serif;
-                font-size: 10pt;
-                line-height: 1.1;
-            }
-            .template-IEEE .paper-columns {
-                column-count: 2;
-                column-gap: 5mm;
-                text-align: justify;
-            }
-            .template-IEEE .paper-front-matter {
-                column-span: all;
-                margin-bottom: 6mm;
-                text-align: center;
-            }
-            .template-IEEE .paper-title {
-                font-size: 24pt;
-                font-weight: normal;
-                margin-bottom: 12pt;
-                line-height: 1;
-            }
-            .template-IEEE .paper-authors {
-                font-size: 11pt;
-                margin-bottom: 12pt;
-            }
-            .template-IEEE .paper-h1 {
-                font-size: 10pt;
-                font-weight: bold;
-                text-align: center;
-                font-variant: small-caps;
-                margin-top: 12pt;
-                margin-bottom: 6pt;
-                page-break-after: avoid;
-            }
-            .template-IEEE .paper-abstract {
-                font-size: 9pt;
-                font-weight: bold;
-                text-align: justify;
-                margin: 0 15mm 8pt 15mm;
-            }
-            .template-IEEE .paper-abstract-label {
-                font-style: italic;
-            }
-            .template-IEEE p { text-indent: 3.5mm; margin: 0 0 4pt 0; }
-        `
-    },
-    // ... other templates would need similar A4 updates ...
-    SPRINGER: {
-        name: "Springer LNCS (A4)",
-        css: `
-            .template-SPRINGER {
-                width: ${A4_W_MM}mm;
-                padding: 5cm 2.5cm 2.5cm 2.5cm;
-                font-family: 'Times New Roman', Times, serif;
-                font-size: 10pt;
-                line-height: 1.2;
-            }
-            .template-SPRINGER .paper-columns {
-                column-count: 1; 
-                text-align: justify;
-                max-width: 12.2cm; 
-                margin: 0 auto;
-            }
-            .template-SPRINGER .paper-front-matter {
-                text-align: center;
-                margin-bottom: 2cm;
-            }
-            .template-SPRINGER .paper-title {
-                font-size: 14pt;
-                font-weight: bold;
-                margin-bottom: 16pt;
-            }
-            /* ... rest same ... */
-            .template-SPRINGER p { text-indent: 0.5cm; margin: 0; }
-        `
+/*
+ * IEEE CONFERENCE TEMPLATE
+ * ────────────────────────
+ * • A4 page (210 × 297 mm)
+ * • Margins: top 19 mm, bottom 43 mm, sides 13 mm
+ * • Two equal columns, 5 mm gutter
+ * • column-fill: auto  → fills left column first, then right, then wraps to next page
+ * • column-height = printable body height so columns never bleed into the gap stripe
+ */
+const IEEE_CSS = `
+    .template-IEEE {
+        width: ${A4_W_MM}mm;
+        padding: ${IEEE_MT}mm ${IEEE_MS}mm 0 ${IEEE_MS}mm;
+        font-family: 'Times New Roman', Times, serif;
+        font-size: 10pt;
+        line-height: 1.15;
     }
+    /* Front matter spans full width */
+    .template-IEEE .paper-front-matter {
+        margin-bottom: 5mm;
+        text-align: center;
+    }
+    .template-IEEE .paper-title {
+        font-size: 20pt;
+        font-weight: normal;
+        margin-bottom: 10pt;
+        line-height: 1.1;
+    }
+    .template-IEEE .paper-authors {
+        font-size: 10pt;
+        margin-bottom: 8pt;
+        line-height: 1.4;
+    }
+    .template-IEEE .paper-abstract {
+        font-size: 9pt;
+        text-align: justify;
+        margin: 0 12mm 6mm 12mm;
+    }
+    .template-IEEE .paper-abstract-label {
+        font-weight: bold;
+        font-style: italic;
+    }
+    /*
+     * Two-column body.
+     * column-height limits each column to the printable body height so
+     * text wraps to the next column / page before hitting the grey gap.
+     */
+    .template-IEEE .paper-columns {
+        column-count: 2;
+        column-gap: 5mm;
+        column-fill: auto;
+        column-rule: none;
+        height: auto;
+        text-align: justify;
+    }
+    .template-IEEE .paper-h1 {
+        font-size: 10pt;
+        font-weight: bold;
+        text-align: center;
+        font-variant: small-caps;
+        margin-top: 10pt;
+        margin-bottom: 5pt;
+        break-after: avoid;
+        column-break-after: avoid;
+    }
+    .template-IEEE p {
+        text-indent: 3.5mm;
+        margin: 0 0 3pt 0;
+    }
+    /* Section wrapper: keep heading + first paragraph together */
+    .template-IEEE .paper-columns > div {
+        break-inside: avoid-column;
+    }
+    /* Bottom margin area — pushed by padding on wrapper (see PagedColumn) */
+`;
+
+/*
+ * SPRINGER LNCS TEMPLATE
+ * ──────────────────────
+ * • A4 page (210 × 297 mm)
+ * • Margins: top 5 cm, bottom 2.5 cm, sides 2.5 cm
+ * • Single column, 12.2 cm text block
+ * • Content overflows naturally to next page
+ */
+const SPRINGER_CSS = `
+    .template-SPRINGER {
+        width: ${A4_W_MM}mm;
+        padding: ${SPR_MT_MM}mm ${SPR_MS_MM}mm 0 ${SPR_MS_MM}mm;
+        font-family: 'Times New Roman', Times, serif;
+        font-size: 10pt;
+        line-height: 1.2;
+    }
+    .template-SPRINGER .paper-front-matter {
+        text-align: center;
+        margin-bottom: 18pt;
+    }
+    .template-SPRINGER .paper-title {
+        font-size: 14pt;
+        font-weight: bold;
+        margin-bottom: 14pt;
+        line-height: 1.2;
+    }
+    .template-SPRINGER .paper-authors {
+        font-size: 10pt;
+        margin-bottom: 10pt;
+    }
+    .template-SPRINGER .paper-abstract {
+        font-size: 9pt;
+        margin: 0 0 12pt 0;
+        text-align: justify;
+    }
+    .template-SPRINGER .paper-abstract-label {
+        font-weight: bold;
+    }
+    .template-SPRINGER .paper-columns {
+        column-count: 1;
+        text-align: justify;
+    }
+    .template-SPRINGER .paper-h1 {
+        font-size: 11pt;
+        font-weight: bold;
+        margin-top: 14pt;
+        margin-bottom: 6pt;
+        break-after: avoid;
+    }
+    .template-SPRINGER p {
+        text-indent: 0;
+        margin: 0 0 6pt 0;
+    }
+`;
+
+const TEMPLATES: Record<string, { name: string; css: string }> = {
+    IEEE:     { name: 'IEEE Conference (A4)',  css: IEEE_CSS },
+    SPRINGER: { name: 'Springer LNCS (A4)',    css: SPRINGER_CSS },
+};
+
+// Bottom-margin padding per template (mm) — appended to each page's worth of content
+// so text never bleeds into the grey gap stripe.
+const TEMPLATE_BOTTOM_MM: Record<string, number> = {
+    IEEE:     IEEE_MB,
+    SPRINGER: SPR_MB_MM,
 };
 
 interface Block {
@@ -210,145 +296,125 @@ export const WorkspaceStudio: React.FC<WorkspaceStudioProps> = ({
     canUndo,
     canRedo,
     onOpenPaper,
-    isStreaming = false
+    isStreaming = false,
 }) => {
     // --- STATE ---
-    const [viewMode, setViewMode] = useState<'visual' | 'source'>('visual');
     const [blocks, setBlocks] = useState<Block[]>([]);
     const [editingBlockId, setEditingBlockId] = useState<string | null>(null);
     const [zoom, setZoom] = useState(100);
 
-    // Template State
     const [activeTemplate, setActiveTemplate] = useState<string>('IEEE');
     const [isRefactoring, setIsRefactoring] = useState(false);
     const [customTemplates, setCustomTemplates] = useState<string[]>([]);
     const [templateMenuOpen, setTemplateMenuOpen] = useState(false);
 
-    // Pagination State
     const [currentPage, setCurrentPage] = useState(1);
     const [totalPages, setTotalPages] = useState(1);
-    const viewportRef = useRef<HTMLDivElement>(null);
 
-    const [fontSize, setFontSize] = useState(11); // pt
-    const [lineHeight, setLineHeight] = useState(1.5);
-    const [citationFormat, setCitationFormat] = useState<'IEEE' | 'APA' | 'Chicago' | 'MLA'>('IEEE');
     const { addToast } = useToastStore();
-
-    // Editor State
-    const [editorRef, setEditorRef] = useState<any>(null);
     const canvasRef = useRef<HTMLDivElement>(null);
-
-    // File Upload Ref
+    const viewportRef = useRef<HTMLDivElement>(null);
     const fileInputRef = useRef<HTMLInputElement>(null);
 
-    // --- PAGINATION LOGIC ---
-    const PX_PER_MM = 3.78;
+    // CSS reference pixels per mm at 96 dpi (1in = 96px, 1in = 25.4mm)
+    const PX_PER_MM = 96 / 25.4; // ≈ 3.7795
 
+    // --- PAGINATION ---
     useEffect(() => {
         const updatePagination = () => {
-            if (canvasRef.current && viewportRef.current) {
-                const totalHeight = canvasRef.current.scrollHeight;
-                // Since we use CSS zoom, the scrollHeight matches the visual height (scaled)
-                const pageUnitPx = (TOTAL_UNIT_MM * PX_PER_MM) * (zoom / 100);
+            if (!canvasRef.current || !viewportRef.current) return;
 
-                const pages = Math.max(1, Math.ceil(totalHeight / pageUnitPx));
-                setTotalPages(pages);
+            // We measure the canvas in UNSCALED CSS pixels by temporarily
+            // reading getBoundingClientRect (which reflects zoom) and dividing
+            // by the zoom factor, giving us the true layout height.
+            // Then we compare against one A4+gap page in unscaled CSS pixels.
+            const zoomFactor = zoom / 100;
+            const rect = canvasRef.current.getBoundingClientRect();
+            const unscaledHeight = rect.height / zoomFactor;
 
-                const scrollY = viewportRef.current.scrollTop;
-                const scaledPageHeight = pageUnitPx * (zoom / 100);
+            // One page unit in unscaled CSS px
+            const pageUnitPx = TOTAL_UNIT_MM * PX_PER_MM;
 
-                // Approximate current page
-                const current = Math.min(pages, Math.max(1, Math.floor((scrollY + (scaledPageHeight / 3)) / scaledPageHeight) + 1));
+            const pages = Math.max(1, Math.ceil(unscaledHeight / pageUnitPx));
+            setTotalPages(pages);
 
-                setCurrentPage(current);
-            }
+            // Current page: viewport scrollTop is in real (zoomed) px,
+            // so we scale it back to unscaled before dividing.
+            const scrollY = viewportRef.current.scrollTop / zoomFactor;
+            const current = Math.min(pages, Math.max(1,
+                Math.floor((scrollY + pageUnitPx / 3) / pageUnitPx) + 1
+            ));
+            setCurrentPage(current);
         };
 
         const viewport = viewportRef.current;
-        if (viewport) {
-            viewport.addEventListener('scroll', updatePagination);
-            updatePagination();
-            const ro = new ResizeObserver(updatePagination);
-            if (canvasRef.current) ro.observe(canvasRef.current);
-
-            return () => {
-                viewport.removeEventListener('scroll', updatePagination);
-                ro.disconnect();
-            };
-        }
-    }, [zoom, blocks, activeTemplate, viewMode]);
+        if (!viewport) return;
+        viewport.addEventListener('scroll', updatePagination);
+        updatePagination();
+        const ro = new ResizeObserver(updatePagination);
+        if (canvasRef.current) ro.observe(canvasRef.current);
+        return () => { viewport.removeEventListener('scroll', updatePagination); ro.disconnect(); };
+    }, [zoom, blocks, activeTemplate]);
 
     const scrollToPage = (page: number) => {
         if (!viewportRef.current) return;
         const targetPage = Math.max(1, Math.min(page, totalPages));
+        // Scroll in real (zoomed) px: unscaled page offset × zoom factor
         const pageUnitPx = TOTAL_UNIT_MM * PX_PER_MM;
-        const scaledPageHeight = pageUnitPx * (zoom / 100);
-
-        viewportRef.current.scrollTo({
-            top: (targetPage - 1) * scaledPageHeight,
-            behavior: 'smooth'
-        });
+        viewportRef.current.scrollTo({ top: (targetPage - 1) * pageUnitPx * (zoom / 100), behavior: 'smooth' });
     };
 
     // --- DRAFT PERSISTENCE (Load on Mount) ---
     useEffect(() => {
         if (!activeProject?.id) return;
-        
-        const loadSavedDraft = async () => {
+        const load = async () => {
             try {
                 const draft = await loadDraft(activeProject.id);
                 if (draft.full_content && draft.full_content !== content) {
                     onChange(draft.full_content);
                 }
-            } catch (error) {
-                console.warn('Failed to load draft:', error);
+            } catch (e) {
+                console.warn('Failed to load draft:', e);
             }
         };
-        
-        loadSavedDraft();
+        load();
     }, [activeProject?.id]);
 
-    // --- DRAFT PERSISTENCE (Auto-save with Debounce) ---
+    // --- DRAFT PERSISTENCE (Auto-save) ---
     useEffect(() => {
         if (!activeProject?.id || !content) return;
-        
-        const saveTimer = setTimeout(() => {
-            saveDraft(activeProject.id, null, content).catch(error => {
-                console.warn('Failed to auto-save draft:', error);
-            });
-        }, 3000); // Save after 3 seconds of inactivity
-        
-        return () => clearTimeout(saveTimer);
+        const t = setTimeout(() => {
+            saveDraft(activeProject.id, null, content).catch(e => console.warn('Auto-save failed:', e));
+        }, 3000);
+        return () => clearTimeout(t);
     }, [activeProject?.id, content]);
 
-    // --- DEBUG: Track view mode and content ---
-    useEffect(() => {
-        console.log('[WorkspaceStudio] View mode:', viewMode, '| Content length:', content?.length, '| Blocks:', blocks.length);
-    }, [viewMode, content, blocks]);
+    // --- PARSE Markdown → Blocks ---
+    // Allow re-parse during streaming even if editingBlockId is set,
+    // but skip only if the user is actively typing in the Monaco editor.
+    const isStreamingRef = useRef(isStreaming);
+    useEffect(() => { isStreamingRef.current = isStreaming; }, [isStreaming]);
 
-    // --- PARSING LOGIC (Markdown -> Blocks) ---
     useEffect(() => {
-        if (!content) return;
-        if (editingBlockId) return;
-        // Don't re-parse if we are just switching back and forth unless content changed
-        // But content does change when editing in Source mode, so this is correct.
+        // Skip re-parse only when user is manually editing a block AND not streaming
+        if (editingBlockId && !isStreamingRef.current) return;
+        if (!content) { setBlocks([]); return; }
 
         const newBlocks: Block[] = [];
         const lines = content.split('\n');
-
         let currentType: Block['type'] = 'title';
         let buffer: string[] = [];
         let currentHeading = '';
 
-        const flush = (nextType?: Block['type'], nextHeading: string = '') => {
+        const flush = (nextType?: Block['type'], nextHeading = '') => {
             if (buffer.length > 0 || currentType === 'title') {
                 if (currentType === 'title') {
-                    const titleText = buffer[0]?.replace(/^#\s/, '') || 'Untitled';
+                    const titleText = buffer[0]?.replace(/^#+\s*/, '') || 'Untitled';
                     newBlocks.push({ id: 'meta-title', type: 'title', content: titleText });
                     const authorIdx = buffer.findIndex(l => l.includes('**Authors:**'));
                     if (authorIdx !== -1) {
                         const authorText = buffer.slice(authorIdx + 1).join('\n').trim();
-                        newBlocks.push({ id: 'meta-authors', type: 'authors', content: authorText });
+                        if (authorText) newBlocks.push({ id: 'meta-authors', type: 'authors', content: authorText });
                     }
                 } else if (currentType === 'abstract' || currentType === 'section') {
                     const blockContent = buffer.join('\n').trim();
@@ -357,113 +423,66 @@ export const WorkspaceStudio: React.FC<WorkspaceStudioProps> = ({
                             id: `blk-${newBlocks.length}`,
                             type: currentType,
                             heading: currentHeading,
-                            content: blockContent
+                            content: blockContent,
                         });
                     }
                 }
             }
             buffer = [];
-            if (nextType) {
-                currentType = nextType;
-                currentHeading = nextHeading;
-            }
+            if (nextType) { currentType = nextType; currentHeading = nextHeading; }
         };
 
         lines.forEach(line => {
-            if (line.startsWith('## Abstract')) {
-                flush('abstract');
-            } else if (line.startsWith('## ')) {
-                flush('section', line.replace('## ', '').trim());
-            } else {
-                buffer.push(line);
-            }
+            if (line.startsWith('## Abstract')) flush('abstract');
+            else if (line.startsWith('## '))      flush('section', line.replace(/^##\s*/, '').trim());
+            else                                   buffer.push(line);
         });
-        
-        // Flush remaining buffer without starting a new section
         flush();
-        
-        console.log('[WorkspaceStudio] Parsed blocks:', newBlocks.length, newBlocks.map(b => ({ type: b.type, heading: b.heading, contentLength: b.content?.length })));
         setBlocks(newBlocks);
-
     }, [content, editingBlockId]);
 
-    // --- RECONSTRUCTION LOGIC ---
+    // --- RECONSTRUCT Blocks → Markdown ---
     const saveBlocks = (updatedBlocks: Block[]) => {
         let md = '';
         updatedBlocks.forEach(b => {
-            if (b.type === 'title') md += `# ${b.content}\n\n`;
-            else if (b.type === 'authors') md += `**Authors:**\n${b.content}\n\n`;
+            if      (b.type === 'title')    md += `# ${b.content}\n\n`;
+            else if (b.type === 'authors')  md += `**Authors:**\n${b.content}\n\n`;
             else if (b.type === 'abstract') md += `## Abstract\n${b.content}\n\n`;
-            else if (b.type === 'section') md += `## ${b.heading}\n${b.content}\n\n`;
+            else if (b.type === 'section')  md += `## ${b.heading}\n${b.content}\n\n`;
         });
         onChange(md);
         setBlocks(updatedBlocks);
     };
 
-    const handleBlockChange = (id: string, newContent: string) => {
-        const updated = blocks.map(b => b.id === id ? { ...b, content: newContent } : b);
-        saveBlocks(updated);
-    };
-
-    const handleHeadingChange = (id: string, newHeading: string) => {
-        const updated = blocks.map(b => b.id === id ? { ...b, heading: newHeading } : b);
-        saveBlocks(updated);
-    };
+    const handleBlockChange   = (id: string, v: string) => saveBlocks(blocks.map(b => b.id === id ? { ...b, content: v } : b));
+    const handleHeadingChange = (id: string, v: string) => saveBlocks(blocks.map(b => b.id === id ? { ...b, heading: v } : b));
 
     const addNewSection = () => {
-        const newBlock: Block = {
-            id: `blk-${Date.now()}`,
-            type: 'section',
-            heading: 'New Section',
-            content: 'Start writing here...'
-        };
-        saveBlocks([...blocks, newBlock]);
-        setEditingBlockId(newBlock.id);
+        const nb: Block = { id: `blk-${Date.now()}`, type: 'section', heading: 'New Section', content: 'Start writing here...' };
+        saveBlocks([...blocks, nb]);
+        setEditingBlockId(nb.id);
     };
 
     const deleteBlock = (id: string) => {
-        if (confirm("Delete this section?")) {
-            saveBlocks(blocks.filter(b => b.id !== id));
-            setEditingBlockId(null);
-        }
+        if (confirm('Delete this section?')) { saveBlocks(blocks.filter(b => b.id !== id)); setEditingBlockId(null); }
     };
 
-    const handleTemplateSwitch = (templateKey: string) => {
+    const handleTemplateSwitch = (key: string) => {
         setIsRefactoring(true);
         setTemplateMenuOpen(false);
-        setTimeout(() => {
-            setActiveTemplate(templateKey);
-            setIsRefactoring(false);
-        }, 800);
+        setTimeout(() => { setActiveTemplate(key); setIsRefactoring(false); }, 600);
     };
 
-    const handleCustomUpload = (e: React.ChangeEvent<HTMLInputElement>) => {
-        const file = e.target.files?.[0];
-        if (!file) return;
+    const handlePrint = () => window.print();
 
-        setIsRefactoring(true);
-        setTemplateMenuOpen(false);
-
-        setTimeout(() => {
-            const templateName = file.name.replace(/\.(tex|cls|zip)$/, '');
-            setCustomTemplates(prev => [...prev, templateName]);
-            setActiveTemplate('IEEE');
-            addToast(`Template "${templateName}" uploaded and analyzed.`, 'success');
-            setIsRefactoring(false);
-        }, 1500);
-    };
-
-    const handlePrint = () => { window.print(); };
-
-    const handleSourceEditorMount = (editor: any, monaco: any) => {
-        setupMonaco(monaco);
-    };
+    // Bottom padding needed per page so content doesn't bleed into the grey gap
+    const bottomPadMm = TEMPLATE_BOTTOM_MM[activeTemplate] ?? 25;
 
     return (
-        <div className="flex flex-col h-full bg-[#e5e7eb] text-gray-800 font-sans overflow-hidden">
+        <div className="flex flex-col h-full bg-[#525659] text-gray-800 font-sans overflow-hidden">
             {/* INJECT STYLES */}
             <style>{BASE_STYLES}</style>
-            <style>{TEMPLATES[activeTemplate]?.css || TEMPLATES['IEEE'].css}</style>
+            <style>{TEMPLATES[activeTemplate]?.css ?? TEMPLATES['IEEE'].css}</style>
 
             {/* TOOLBAR */}
             <div className="h-12 bg-white border-b border-gray-300 flex items-center justify-between px-4 shrink-0 z-30 shadow-sm print:hidden">
@@ -472,82 +491,52 @@ export const WorkspaceStudio: React.FC<WorkspaceStudioProps> = ({
                         <Printer className="w-4 h-4 text-indigo-600" /> Live Paper
                     </span>
 
-                    {/* VIEW TOGGLE - Source mode commented out, only visual mode needed */}
-                    {/* <div className="flex bg-gray-100 p-1 rounded-lg border border-gray-200">
-                        <button
-                            onClick={() => setViewMode('visual')}
-                            className={`flex items-center gap-2 px-3 py-1.5 rounded-md text-xs font-bold transition-all ${viewMode === 'visual' ? 'bg-white text-indigo-600 shadow-sm' : 'text-gray-500 hover:text-gray-700'}`}
-                        >
-                            <FileText className="w-3.5 h-3.5" />
-                            Visual
-                        </button>
-                        <button
-                            onClick={() => setViewMode('source')}
-                            className={`flex items-center gap-2 px-3 py-1.5 rounded-md text-xs font-bold transition-all ${viewMode === 'source' ? 'bg-white text-indigo-600 shadow-sm' : 'text-gray-500 hover:text-gray-700'}`}
-                        >
-                            <Code className="w-3.5 h-3.5" />
-                            Source
-                        </button>
-                    </div> */}
-
-                    {/* <div className="h-4 w-px bg-gray-300"></div> */}
-
                     {/* TEMPLATE SELECTOR */}
-                    <div className="relative animate-in fade-in duration-300">
-                            <button
-                                onClick={() => setTemplateMenuOpen(!templateMenuOpen)}
-                                className="flex items-center gap-2 px-3 py-1.5 bg-gray-100 hover:bg-gray-200 rounded-md text-xs font-semibold text-gray-700 transition-colors"
-                            >
-                                <LayoutTemplate className="w-3.5 h-3.5 text-gray-500" />
-                                {customTemplates.includes(activeTemplate) ? activeTemplate : TEMPLATES[activeTemplate].name}
-                                <ChevronDown className="w-3 h-3 text-gray-400" />
-                            </button>
-
-                            {templateMenuOpen && (
-                                <div className="absolute top-full left-0 mt-2 w-56 bg-white border border-gray-200 rounded-lg shadow-xl z-50 animate-in fade-in zoom-in-95 duration-100">
-                                    <div className="p-1">
-                                        <div className="px-2 py-1.5 text-[10px] font-bold text-gray-400 uppercase tracking-wider">Standard Templates</div>
-                                        {Object.entries(TEMPLATES).map(([key, t]) => (
-                                            <button
-                                                key={key}
-                                                onClick={() => handleTemplateSwitch(key)}
-                                                className={`w-full text-left px-2 py-1.5 text-xs rounded-md flex items-center justify-between ${activeTemplate === key ? 'bg-indigo-50 text-indigo-600 font-bold' : 'hover:bg-gray-50 text-gray-700'}`}
-                                            >
-                                                {t.name}
-                                                {activeTemplate === key && <Check className="w-3 h-3" />}
-                                            </button>
-                                        ))}
-                                    </div>
+                    <div className="relative">
+                        <button
+                            onClick={() => setTemplateMenuOpen(!templateMenuOpen)}
+                            className="flex items-center gap-2 px-3 py-1.5 bg-gray-100 hover:bg-gray-200 rounded-md text-xs font-semibold text-gray-700 transition-colors"
+                        >
+                            <LayoutTemplate className="w-3.5 h-3.5 text-gray-500" />
+                            {customTemplates.includes(activeTemplate) ? activeTemplate : TEMPLATES[activeTemplate]?.name}
+                            <ChevronDown className="w-3 h-3 text-gray-400" />
+                        </button>
+                        {templateMenuOpen && (
+                            <div className="absolute top-full left-0 mt-2 w-56 bg-white border border-gray-200 rounded-lg shadow-xl z-50">
+                                <div className="p-1">
+                                    <div className="px-2 py-1.5 text-[10px] font-bold text-gray-400 uppercase tracking-wider">Standard Templates</div>
+                                    {Object.entries(TEMPLATES).map(([key, t]) => (
+                                        <button
+                                            key={key}
+                                            onClick={() => handleTemplateSwitch(key)}
+                                            className={`w-full text-left px-2 py-1.5 text-xs rounded-md flex items-center justify-between ${activeTemplate === key ? 'bg-indigo-50 text-indigo-600 font-bold' : 'hover:bg-gray-50 text-gray-700'}`}
+                                        >
+                                            {t.name}
+                                            {activeTemplate === key && <Check className="w-3 h-3" />}
+                                        </button>
+                                    ))}
                                 </div>
-                            )}
+                            </div>
+                        )}
                     </div>
 
+                    {/* ZOOM */}
                     <div className="flex items-center gap-1 bg-gray-100 rounded p-0.5 ml-2">
-                        <button onClick={() => setZoom(z => Math.max(50, z - 10))} className="p-1 hover:bg-white rounded"><Minimize className="w-3 h-3" /></button>
+                        <button onClick={() => setZoom(z => Math.max(40, z - 10))} className="p-1 hover:bg-white rounded"><Minimize className="w-3 h-3" /></button>
                         <span className="text-xs w-8 text-center">{zoom}%</span>
-                        <button onClick={() => setZoom(z => Math.min(150, z + 10))} className="p-1 hover:bg-white rounded"><Maximize className="w-3 h-3" /></button>
+                        <button onClick={() => setZoom(z => Math.min(160, z + 10))} className="p-1 hover:bg-white rounded"><Maximize className="w-3 h-3" /></button>
                     </div>
                 </div>
+
                 <div className="flex items-center gap-3">
                     <div className="flex items-center gap-1 border-r border-gray-200 pr-3 mr-1">
-                        <button
-                            onClick={onUndo}
-                            disabled={!canUndo}
-                            className="p-1.5 text-gray-500 hover:text-gray-800 hover:bg-gray-100 rounded disabled:opacity-30"
-                            title="Undo Agent Edit"
-                        >
+                        <button onClick={onUndo} disabled={!canUndo} className="p-1.5 text-gray-500 hover:text-gray-800 hover:bg-gray-100 rounded disabled:opacity-30" title="Undo">
                             <Undo2 className="w-4 h-4" />
                         </button>
-                        <button
-                            onClick={onRedo}
-                            disabled={!canRedo}
-                            className="p-1.5 text-gray-500 hover:text-gray-800 hover:bg-gray-100 rounded disabled:opacity-30"
-                            title="Redo"
-                        >
+                        <button onClick={onRedo} disabled={!canRedo} className="p-1.5 text-gray-500 hover:text-gray-800 hover:bg-gray-100 rounded disabled:opacity-30" title="Redo">
                             <Redo2 className="w-4 h-4" />
                         </button>
                     </div>
-
                     <button onClick={addNewSection} className="flex items-center gap-1 px-3 py-1.5 bg-indigo-50 text-indigo-700 hover:bg-indigo-100 rounded text-xs font-bold transition-colors">
                         <PlusCircle className="w-3.5 h-3.5" /> Add Section
                     </button>
@@ -557,107 +546,102 @@ export const WorkspaceStudio: React.FC<WorkspaceStudioProps> = ({
                 </div>
             </div>
 
-            {/* CONTENT AREA - Visual Paper Mode Only */}
+            {/* PAPER VIEWPORT */}
             <div ref={viewportRef} className="paper-viewport flex-1 relative print:p-0 print:overflow-visible">
-                    {/* REFACTORING OVERLAY */}
-                    {isRefactoring && (
-                        <div className="fixed inset-0 z-50 flex flex-col items-center justify-center bg-gray-900/50 backdrop-blur-sm animate-in fade-in duration-200">
-                            <div className="bg-white p-6 rounded-2xl shadow-xl flex flex-col items-center gap-4">
-                                <RefreshCw className="w-8 h-8 text-indigo-600 animate-spin" />
-                                <div className="text-center">
-                                    <h3 className="font-bold text-gray-900">Refactoring Content</h3>
-                                    <p className="text-xs text-gray-500 mt-1">Adapting structure to {customTemplates.includes(activeTemplate) ? activeTemplate : TEMPLATES[activeTemplate].name}...</p>
-                                </div>
+
+                {isRefactoring && (
+                    <div className="fixed inset-0 z-50 flex items-center justify-center bg-gray-900/60 backdrop-blur-sm">
+                        <div className="bg-white p-6 rounded-2xl shadow-xl flex flex-col items-center gap-4">
+                            <RefreshCw className="w-8 h-8 text-indigo-600 animate-spin" />
+                            <div className="text-center">
+                                <h3 className="font-bold text-gray-900">Switching Template</h3>
+                                <p className="text-xs text-gray-500 mt-1">Adapting to {TEMPLATES[activeTemplate]?.name}…</p>
                             </div>
                         </div>
-                    )}
+                    </div>
+                )}
 
-                    {/* CANVAS WRAPPER FOR ZOOM */}
-                    <div className="flex justify-center min-h-full items-start pb-20">
-                        <div
-                            ref={canvasRef}
-                            className={`paper-canvas template-${activeTemplate} print:transform-none print:shadow-none print:m-0`}
-                            style={{ zoom: zoom / 100, transformOrigin: 'top center' }}
-                        >
-                            {/* Page Numbers Overlay */}
-                            {Array.from({ length: totalPages }).map((_, i) => (
-                                <div
-                                    key={i}
-                                    className="page-number-overlay"
-                                    style={{ top: `${(i + 1) * A4_H_MM + (i * GAP_MM) - 15}mm` }} // Just above the gap
-                                >
-                                    {i + 1}
+                {/* Zoom wrapper */}
+                <div className="flex justify-center items-start py-10">
+                    <div
+                        ref={canvasRef}
+                        className={`paper-canvas template-${activeTemplate} print:transform-none print:shadow-none print:m-0`}
+                        style={{ zoom: zoom / 100 }}
+                    >
+                        {/* Page-number overlays — one per detected page, sitting in the grey gap */}
+                        {Array.from({ length: totalPages }).map((_, i) => (
+                            <div
+                                key={i}
+                                className="page-number-overlay"
+                                style={{ top: `${(i + 1) * A4_H_MM + i * GAP_MM}mm` }}
+                            >
+                                {i + 1}
+                            </div>
+                        ))}
+
+                        {/* ── FRONT MATTER (title, authors, abstract) ── */}
+                        <div className="paper-front-matter">
+                            {blocks.filter(b => b.type === 'title').map(block => (
+                                <EditableBlock key={block.id} block={block}
+                                    isEditing={editingBlockId === block.id}
+                                    setEditing={setEditingBlockId}
+                                    onChange={handleBlockChange}
+                                    className="paper-title" />
+                            ))}
+                            {blocks.filter(b => b.type === 'authors').map(block => (
+                                <EditableBlock key={block.id} block={block}
+                                    isEditing={editingBlockId === block.id}
+                                    setEditing={setEditingBlockId}
+                                    onChange={handleBlockChange}
+                                    className="paper-authors" />
+                            ))}
+                            {blocks.filter(b => b.type === 'abstract').map(block => (
+                                <div key={block.id} className="paper-abstract">
+                                    <span className="paper-abstract-label">Abstract— </span>
+                                    <EditableBlock block={block}
+                                        isEditing={editingBlockId === block.id}
+                                        setEditing={setEditingBlockId}
+                                        onChange={handleBlockChange}
+                                        inline />
                                 </div>
                             ))}
+                        </div>
 
-                            {/* 1. FRONT MATTER */}
-                            <div className="paper-front-matter">
-                                {/* Title Block */}
-                                {blocks.filter(b => b.type === 'title').map(block => (
-                                    <EditableBlock
-                                        key={block.id}
-                                        block={block}
-                                        isEditing={editingBlockId === block.id}
-                                        setEditing={setEditingBlockId}
-                                        onChange={handleBlockChange}
-                                        className="paper-title"
-                                    />
-                                ))}
-
-                                {/* Author Block */}
-                                {blocks.filter(b => b.type === 'authors').map(block => (
-                                    <EditableBlock
-                                        key={block.id}
-                                        block={block}
-                                        isEditing={editingBlockId === block.id}
-                                        setEditing={setEditingBlockId}
-                                        onChange={handleBlockChange}
-                                        className="paper-authors"
-                                    />
-                                ))}
-
-                                {/* Abstract Block */}
-                                {blocks.filter(b => b.type === 'abstract').map(block => (
-                                    <div key={block.id} className="paper-abstract">
-                                        <span className="paper-abstract-label">Abstract—</span>
-                                        <EditableBlock
-                                            block={block}
-                                            isEditing={editingBlockId === block.id}
-                                            setEditing={setEditingBlockId}
-                                            onChange={handleBlockChange}
-                                            inline
-                                        />
-                                    </div>
-                                ))}
-                            </div>
-
-                            {/* 2. COLUMNS BODY */}
+                        {/*
+                         * ── BODY COLUMNS ──
+                         *
+                         * For IEEE (2 col): we wrap the columns div in a container that
+                         * has padding-bottom = bottom margin + gap so content stops before
+                         * the grey stripe. CSS columns then auto-balance across pages.
+                         *
+                         * For Springer (1 col): same padding approach; content wraps
+                         * naturally across pages.
+                         */}
+                        <PagedColumns bottomPadMm={bottomPadMm + GAP_MM}>
                             <div className="paper-columns">
-                                {(() => {
-                                    const sectionBlocks = blocks.filter(b => b.type === 'section');
-                                    console.log('[WorkspaceStudio] Rendering sections:', sectionBlocks.length, sectionBlocks.map(b => b.heading));
-                                    return sectionBlocks.map((block, idx) => (
-                                        <div key={block.id} className="mb-6 break-inside-avoid">
-                                            {/* Section Header */}
-                                            <div className="group flex items-center gap-2 mb-2">
-                                                {editingBlockId === block.id ? (
-                                                    <input
-                                                        value={block.heading}
-                                                        onChange={(e) => handleHeadingChange(block.id, e.target.value)}
-                                                        className="font-bold uppercase text-sm border-b border-indigo-500 outline-none w-full"
-                                                        placeholder="SECTION TITLE"
-                                                    />
-                                                ) : (
-                                                    <h1 className="paper-h1 cursor-pointer hover:text-indigo-600" onClick={() => setEditingBlockId(block.id)}>
-                                                        {idx + 1}. {block.heading}
-                                                    </h1>
-                                                )}
-                                                {editingBlockId === block.id && (
-                                                    <button onClick={() => deleteBlock(block.id)} className="text-red-400 hover:text-red-600"><Trash2 className="w-3 h-3" /></button>
-                                                )}
-                                            </div>
-
-                                        {/* Content */}
+                                {blocks.filter(b => b.type === 'section').map((block, idx) => (
+                                    <div key={block.id} className="section-block" style={{ breakInside: 'avoid-column', pageBreakInside: 'avoid' }}>
+                                        {/* Section heading */}
+                                        <div className="group flex items-center gap-2 mb-1">
+                                            {editingBlockId === block.id ? (
+                                                <input
+                                                    value={block.heading}
+                                                    onChange={e => handleHeadingChange(block.id, e.target.value)}
+                                                    className="paper-h1 border-b border-indigo-500 outline-none w-full bg-transparent"
+                                                    placeholder="SECTION TITLE"
+                                                />
+                                            ) : (
+                                                <h1 className="paper-h1 w-full cursor-pointer" onClick={() => setEditingBlockId(block.id)}>
+                                                    {idx + 1}. {block.heading}
+                                                </h1>
+                                            )}
+                                            {editingBlockId === block.id && (
+                                                <button onClick={() => deleteBlock(block.id)} className="shrink-0 text-red-400 hover:text-red-600 print:hidden">
+                                                    <Trash2 className="w-3 h-3" />
+                                                </button>
+                                            )}
+                                        </div>
+                                        {/* Section body */}
                                         <EditableBlock
                                             block={block}
                                             isEditing={editingBlockId === block.id}
@@ -667,156 +651,93 @@ export const WorkspaceStudio: React.FC<WorkspaceStudioProps> = ({
                                             activeProject={activeProject}
                                         />
                                     </div>
-                                    ));
-                                })()}
+                                ))}
                             </div>
-                        </div>
+                        </PagedColumns>
+
+                        {/* Empty-paper placeholder */}
+                        {blocks.length === 0 && (
+                            <div className="flex flex-col items-center justify-center py-24 text-gray-400 select-none">
+                                <FileText className="w-12 h-12 mb-4 opacity-30" />
+                                <p className="text-sm font-medium">Your paper will appear here</p>
+                                <p className="text-xs mt-1 opacity-60">Draft sections using the Co-Author panel →</p>
+                            </div>
+                        )}
                     </div>
+                </div>
             </div>
-            
-            {/* SOURCE CODE MODE - Commented out, only visual mode with sectional editor needed */}
-            {/* <div className="flex-1 flex relative overflow-hidden">
-                <div className="flex-1 border-r border-gray-300 overflow-hidden">
-                    <SimpleTextEditor
-                        content={content}
-                        onChange={onChange}
-                        citationFormat={citationFormat}
-                        onFormatChange={setCitationFormat}
-                        isStreaming={isStreaming}
-                    />
-                </div>
-                <div className="flex-1 overflow-hidden">
-                    <LivePaperPreview
-                        content={content}
-                        citationFormat={citationFormat}
-                    />
-                </div>
-            </div> */}
 
             {/* FLOATING PAGINATION CONTROLS */}
-            <div className="absolute bottom-6 left-1/2 transform -translate-x-1/2 z-40 animate-in slide-in-from-bottom-4 print:hidden">
-                    <div className="bg-gray-900 text-white rounded-full shadow-2xl px-4 py-2 flex items-center gap-4 text-sm font-medium border border-gray-700/50 backdrop-blur-md">
-                        <button
-                            onClick={() => scrollToPage(currentPage - 1)}
-                            disabled={currentPage <= 1}
-                            className="p-1 hover:bg-gray-700 rounded-full disabled:opacity-30 transition-colors"
-                        >
-                            <ChevronLeft className="w-4 h-4" />
-                        </button>
-
-                        <div className="flex items-center gap-2 min-w-[100px] justify-center select-none">
-                            <span className="text-gray-400">Page</span>
-                            <input
-                                type="number"
-                                min={1}
-                                max={totalPages}
-                                value={currentPage}
-                                onChange={(e) => {
-                                    const val = parseInt(e.target.value);
-                                    if (!isNaN(val) && val >= 1 && val <= totalPages) {
-                                        scrollToPage(val);
-                                    }
-                                }}
-                                className="w-8 bg-transparent text-center focus:outline-none focus:border-b border-indigo-500 font-bold"
-                            />
-                            <span className="text-gray-400">of {totalPages}</span>
-                        </div>
-
-                        <button
-                            onClick={() => scrollToPage(currentPage + 1)}
-                            disabled={currentPage >= totalPages}
-                            className="p-1 hover:bg-gray-700 rounded-full disabled:opacity-30 transition-colors"
-                        >
-                            <ChevronRight className="w-4 h-4" />
-                        </button>
+            <div className="absolute bottom-6 left-1/2 -translate-x-1/2 z-40 print:hidden">
+                <div className="bg-gray-900 text-white rounded-full shadow-2xl px-4 py-2 flex items-center gap-4 text-sm font-medium border border-gray-700/50">
+                    <button onClick={() => scrollToPage(currentPage - 1)} disabled={currentPage <= 1}
+                        className="p-1 hover:bg-gray-700 rounded-full disabled:opacity-30 transition-colors">
+                        <ChevronLeft className="w-4 h-4" />
+                    </button>
+                    <div className="flex items-center gap-2 min-w-[110px] justify-center select-none">
+                        <span className="text-gray-400">Page</span>
+                        <input type="number" min={1} max={totalPages} value={currentPage}
+                            onChange={e => { const v = parseInt(e.target.value); if (!isNaN(v)) scrollToPage(v); }}
+                            className="w-8 bg-transparent text-center focus:outline-none font-bold" />
+                        <span className="text-gray-400">of {totalPages}</span>
                     </div>
+                    <button onClick={() => scrollToPage(currentPage + 1)} disabled={currentPage >= totalPages}
+                        className="p-1 hover:bg-gray-700 rounded-full disabled:opacity-30 transition-colors">
+                        <ChevronRight className="w-4 h-4" />
+                    </button>
+                </div>
             </div>
         </div>
     );
 };
 
-// --- SUB-COMPONENT: EDITABLE BLOCK ---
+// ── PagedColumns ─────────────────────────────────────────────────────────────
+// Wraps the column content with bottom padding so text never bleeds into the
+// grey gap stripe. The padding equals (bottom margin + gap).
+const PagedColumns: React.FC<{ bottomPadMm: number; children: React.ReactNode }> = ({ bottomPadMm, children }) => (
+    <div style={{ paddingBottom: `${bottomPadMm}mm` }}>
+        {children}
+    </div>
+);
+
+// ── EditableBlock ─────────────────────────────────────────────────────────────
 let monacoConfigured = false;
 const setupMonaco = (monaco: any) => {
     if (monacoConfigured) return;
     monacoConfigured = true;
-
-    // Custom Citation Completion Provider
     monaco.languages.registerCompletionItemProvider('markdown', {
         provideCompletionItems: (model: any, position: any) => {
             const word = model.getWordUntilPosition(position);
             const range = {
-                startLineNumber: position.lineNumber,
-                endLineNumber: position.lineNumber,
-                startColumn: word.startColumn,
-                endColumn: word.endColumn,
+                startLineNumber: position.lineNumber, endLineNumber: position.lineNumber,
+                startColumn: word.startColumn,        endColumn: word.endColumn,
             };
-
             return {
                 suggestions: [
-                    {
-                        label: '\\cite',
-                        kind: monaco.languages.CompletionItemKind.Snippet,
-                        insertText: '\\cite{${1:ref_key}}',
-                        insertTextRules: monaco.languages.CompletionItemInsertTextRule.InsertAsSnippet,
-                        documentation: 'Insert a citation key',
-                        detail: 'Citation',
-                        range: range
-                    },
-                    {
-                        label: 'section',
-                        kind: monaco.languages.CompletionItemKind.Snippet,
-                        insertText: '## ${1:Section Name}',
-                        insertTextRules: monaco.languages.CompletionItemInsertTextRule.InsertAsSnippet,
-                        documentation: 'New Section Header',
-                        range: range
-                    },
-                    {
-                        label: 'equation',
-                        kind: monaco.languages.CompletionItemKind.Snippet,
-                        insertText: '$$ \n  ${1:x = y^2} \n$$',
-                        insertTextRules: monaco.languages.CompletionItemInsertTextRule.InsertAsSnippet,
-                        documentation: 'Math Block',
-                        range: range
-                    }
-                ]
+                    { label: '\\cite', kind: monaco.languages.CompletionItemKind.Snippet, insertText: '\\cite{${1:ref_key}}', insertTextRules: monaco.languages.CompletionItemInsertTextRule.InsertAsSnippet, documentation: 'Insert citation key', detail: 'Citation', range },
+                    { label: 'section', kind: monaco.languages.CompletionItemKind.Snippet, insertText: '## ${1:Section Name}', insertTextRules: monaco.languages.CompletionItemInsertTextRule.InsertAsSnippet, documentation: 'New section header', range },
+                    { label: 'equation', kind: monaco.languages.CompletionItemKind.Snippet, insertText: '$$\n  ${1:x = y^2}\n$$', insertTextRules: monaco.languages.CompletionItemInsertTextRule.InsertAsSnippet, documentation: 'Math block', range },
+                ],
             };
-        }
+        },
     });
-
-    // Theme Customization if needed
-    monaco.editor.defineTheme('scholar-dark', {
-        base: 'vs-dark',
-        inherit: true,
-        rules: [],
-        colors: {
-            'editor.background': '#1e1e1e',
-        }
-    });
+    monaco.editor.defineTheme('scholar-dark', { base: 'vs-dark', inherit: true, rules: [], colors: { 'editor.background': '#1e1e1e' } });
 };
 
-const EditableBlock = ({ block, isEditing, setEditing, onChange, className = '', inline = false }: any) => {
+const EditableBlock = ({ block, isEditing, setEditing, onChange, className = '', inline = false, onOpenPaper, activeProject }: any) => {
+    const handleMount = (editor: any, monaco: any) => { setupMonaco(monaco); editor.focus(); };
 
-    const handleEditorDidMount = (editor: any, monaco: any) => {
-        setupMonaco(monaco);
-        editor.focus();
-    };
-
-    // Markdown Preview Renderer (Simple)
     const renderContent = (content: string) => {
-        // Strip markdown for simple title/author preview, parse for body
         if (block.type === 'title' || block.type === 'authors') {
-            return content.split('\n').map((line, i) => <div key={i}>{line}</div>);
+            return content.split('\n').map((line: string, i: number) => <div key={i}>{line || <br />}</div>);
         }
         return (
-            <Markdown
-                components={{
-                    p: ({ node, ...props }) => <p {...props} className="mb-2" />,
-                    strong: ({ node, ...props }) => <span {...props} className="font-bold" />,
-                    em: ({ node, ...props }) => <span {...props} className="italic" />,
-                    li: ({ node, ...props }) => <li {...props} className="ml-4 list-disc" />
-                }}
-            >
+            <Markdown components={{
+                p:      ({ node, ...p }) => <p      {...p} />,
+                strong: ({ node, ...p }) => <strong {...p} />,
+                em:     ({ node, ...p }) => <em     {...p} />,
+                li:     ({ node, ...p }) => <li     {...p} className="ml-4 list-disc" />,
+            }}>
                 {content}
             </Markdown>
         );
@@ -829,37 +750,23 @@ const EditableBlock = ({ block, isEditing, setEditing, onChange, className = '',
                     <span className="text-[10px] font-bold text-indigo-400 uppercase flex items-center gap-1">
                         <Edit3 className="w-3 h-3" /> Editing {block.type}
                     </span>
-                    <div className="flex gap-2">
-                        <button onClick={(e) => { e.stopPropagation(); setEditing(null); }} className="p-1 hover:bg-green-900/30 text-green-500 rounded transition-colors" title="Save & Close (Esc)">
-                            <Check className="w-3.5 h-3.5" />
-                        </button>
-                    </div>
+                    <button onClick={e => { e.stopPropagation(); setEditing(null); }} className="p-1 hover:bg-green-900/30 text-green-500 rounded" title="Done">
+                        <Check className="w-3.5 h-3.5" />
+                    </button>
                 </div>
                 <Editor
-                    height={block.type === 'section' ? "300px" : "100px"}
+                    height={block.type === 'section' ? '280px' : '90px'}
                     defaultLanguage="markdown"
                     value={block.content}
-                    onChange={(val) => onChange(block.id, val || '')}
-                    onMount={handleEditorDidMount}
+                    onChange={val => onChange(block.id, val || '')}
+                    onMount={handleMount}
                     theme="vs-dark"
                     options={{
-                        minimap: { enabled: true, scale: 0.75 },
-                        lineNumbers: 'on',
-                        folding: true,
-                        foldingHighlight: true,
-                        wordWrap: 'on',
-                        fontSize: 13,
-                        padding: { top: 12, bottom: 12 },
-                        scrollBeyondLastLine: false,
-                        fontFamily: 'JetBrains Mono, monospace',
-                        renderValidationDecorations: 'on',
-                        quickSuggestions: true,
-                        snippetSuggestions: 'inline',
-                        contextmenu: true,
-                        matchBrackets: 'always',
-                        autoClosingBrackets: 'always',
-                        autoClosingQuotes: 'always',
-                        formatOnType: true
+                        minimap: { enabled: false }, lineNumbers: 'off', wordWrap: 'on',
+                        fontSize: 13, padding: { top: 8, bottom: 8 }, scrollBeyondLastLine: false,
+                        fontFamily: 'JetBrains Mono, monospace', quickSuggestions: true,
+                        snippetSuggestions: 'inline', autoClosingBrackets: 'always',
+                        autoClosingQuotes: 'always', formatOnType: true,
                     }}
                 />
             </div>
@@ -871,13 +778,11 @@ const EditableBlock = ({ block, isEditing, setEditing, onChange, className = '',
             className={`editable-block group relative ${className} ${inline ? 'inline' : ''}`}
             onClick={() => setEditing(block.id)}
         >
-            {/* Hover Action */}
-            <div className="absolute -left-6 top-0 opacity-0 group-hover:opacity-100 transition-opacity print:hidden">
-                <div className="p-1 bg-gray-100 rounded shadow-sm cursor-pointer hover:text-indigo-600">
+            <div className="absolute -left-5 top-0 opacity-0 group-hover:opacity-100 transition-opacity print:hidden">
+                <div className="p-1 bg-white rounded shadow-sm border border-gray-200 cursor-pointer hover:text-indigo-600">
                     <Edit3 className="w-3 h-3" />
                 </div>
             </div>
-
             {renderContent(block.content)}
         </div>
     );

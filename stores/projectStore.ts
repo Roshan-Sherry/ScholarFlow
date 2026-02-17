@@ -1,14 +1,19 @@
 /**
  * Project Store - Active Project State
- * Manages active project, file system, and context selection
+ * Manages active project and paper content directly.
+ * No virtual file-system — paper text lives in `paperContent`.
  */
 
 import { create } from 'zustand';
 import type { Project, ProjectFile } from '../types';
+import { EMPTY_MARKDOWN } from '../constants';
 
 interface ProjectStore {
   // State
   activeProject: Project | null;
+  // Direct paper content — no files[] indirection needed
+  paperContent: string;
+  // Keep activeFileId/files for left-sidebar file explorer (non-studio use)
   activeFileId: string;
   selectedContextIds: Set<string>;
   historyStack: string[];
@@ -20,24 +25,28 @@ interface ProjectStore {
   setActiveFileId: (id: string) => void;
   toggleContext: (id: string) => void;
   clearContext: () => void;
-  
-  // File operations
+
+  // Paper content operations (used by Studio / Co-Author)
+  setPaperContent: (content: string) => void;
+  updateSection: (sectionTitle: string, content: string, mode: 'append' | 'replace') => void;
+
+  // File operations (used by left sidebar file explorer)
   updateFileContent: (fileId: string, content: string) => void;
-  updateSection: (fileId: string, sectionTitle: string, content: string, mode: 'append' | 'replace') => void;
   addFile: (file: ProjectFile) => void;
   deleteFile: (fileId: string) => void;
-  
+
   // History
   pushHistory: (content: string) => void;
   undo: () => string | null;
   redo: () => string | null;
-  
+
   // Reset
   reset: () => void;
 }
 
 const initialState = {
   activeProject: null,
+  paperContent: EMPTY_MARKDOWN,
   activeFileId: 'main.md',
   selectedContextIds: new Set<string>(),
   historyStack: [],
@@ -49,7 +58,10 @@ export const useProjectStore = create<ProjectStore>((set, get) => ({
 
   setActiveProject: (project) =>
     set({
-      activeProject: project,
+      activeProject: project ?? null,
+      // Reset paper content to empty template when opening a project.
+      // The draft will be loaded from the backend by WorkspaceStudio on mount.
+      paperContent: EMPTY_MARKDOWN,
       activeFileId: 'main.md',
       selectedContextIds: new Set(),
       historyStack: [],
@@ -68,42 +80,25 @@ export const useProjectStore = create<ProjectStore>((set, get) => ({
   toggleContext: (id) =>
     set((state) => {
       const newSet = new Set(state.selectedContextIds);
-      if (newSet.has(id)) {
-        newSet.delete(id);
-      } else {
-        newSet.add(id);
-      }
+      if (newSet.has(id)) newSet.delete(id);
+      else newSet.add(id);
       return { selectedContextIds: newSet };
     }),
 
   clearContext: () => set({ selectedContextIds: new Set() }),
 
-  updateFileContent: (fileId, content) =>
-    set((state) => {
-      if (!state.activeProject) return state;
+  // ── Direct paper content write ──────────────────────────────────────────
+  setPaperContent: (content) => set({ paperContent: content }),
 
-      const updatedFiles = state.activeProject.files.map((f) =>
-        f.id === fileId ? { ...f, content } : f
+  // ── Update a single ## Section within the paper content ────────────────
+  updateSection: (sectionTitle, content, mode) =>
+    set((state) => {
+      const currentContent = state.paperContent;
+      const escapedTitle = sectionTitle.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
+      const regex = new RegExp(
+        `(## ${escapedTitle}\\n)((?:(?!\\n## )[\\s\\S])*)`,
+        'i'
       );
-
-      return {
-        activeProject: {
-          ...state.activeProject,
-          files: updatedFiles,
-        },
-      };
-    }),
-
-  updateSection: (fileId, sectionTitle, content, mode) =>
-    set((state) => {
-      if (!state.activeProject) return state;
-
-      // Get the current file content from the latest state
-      const currentFile = state.activeProject.files.find((f) => f.id === fileId);
-      if (!currentFile) return state;
-
-      const currentContent = currentFile.content;
-      const regex = new RegExp(`(## ${sectionTitle.replace(/[.*+?^${}()|[\]\\]/g, '\\$&')}\\n)([^#]*)`, 'i');
       const match = currentContent.match(regex);
 
       let newContent = currentContent;
@@ -111,33 +106,32 @@ export const useProjectStore = create<ProjectStore>((set, get) => ({
         if (mode === 'replace') {
           newContent = currentContent.replace(regex, `$1${content}\n`);
         } else {
-          // append mode
-          const currentSectionContent = match[2];
-          if (!currentSectionContent.trim().endsWith(content.trim())) {
+          const existing = match[2];
+          if (!existing.trim().endsWith(content.trim())) {
             newContent = currentContent.replace(regex, `$1$2\n${content}\n`);
           }
         }
       } else {
-        // Section doesn't exist, append it
+        // Section not found — append it
         newContent = currentContent + `\n\n## ${sectionTitle}\n${content}`;
       }
 
-      const updatedFiles = state.activeProject.files.map((f) =>
-        f.id === fileId ? { ...f, content: newContent } : f
-      );
+      return { paperContent: newContent };
+    }),
 
-      return {
-        activeProject: {
-          ...state.activeProject,
-          files: updatedFiles,
-        },
-      };
+  // ── File operations (left-sidebar file explorer, non-studio) ────────────
+  updateFileContent: (fileId, content) =>
+    set((state) => {
+      if (!state.activeProject) return state;
+      const updatedFiles = state.activeProject.files.map((f) =>
+        f.id === fileId ? { ...f, content } : f
+      );
+      return { activeProject: { ...state.activeProject, files: updatedFiles } };
     }),
 
   addFile: (file) =>
     set((state) => {
       if (!state.activeProject) return state;
-
       return {
         activeProject: {
           ...state.activeProject,
@@ -149,21 +143,16 @@ export const useProjectStore = create<ProjectStore>((set, get) => ({
   deleteFile: (fileId) =>
     set((state) => {
       if (!state.activeProject) return state;
-
       const updatedFiles = state.activeProject.files.filter(
         (f) => f.id !== fileId && f.parentId !== fileId
       );
-
       return {
-        activeProject: {
-          ...state.activeProject,
-          files: updatedFiles,
-        },
-        activeFileId:
-          state.activeFileId === fileId ? 'main.md' : state.activeFileId,
+        activeProject: { ...state.activeProject, files: updatedFiles },
+        activeFileId: state.activeFileId === fileId ? 'main.md' : state.activeFileId,
       };
     }),
 
+  // ── History (undo/redo operates on paperContent) ────────────────────────
   pushHistory: (content) =>
     set((state) => ({
       historyStack: [...state.historyStack, content].slice(-50),
@@ -173,43 +162,23 @@ export const useProjectStore = create<ProjectStore>((set, get) => ({
   undo: () => {
     const state = get();
     if (state.historyStack.length === 0) return null;
-
-    const previousState = state.historyStack[state.historyStack.length - 1];
-    const newHistory = state.historyStack.slice(0, -1);
-
-    // Get current content for redo
-    const currentFile = state.activeProject?.files.find(
-      (f) => f.id === state.activeFileId
-    );
-    const currentContent = currentFile?.content || '';
-
+    const previous = state.historyStack[state.historyStack.length - 1];
     set({
-      historyStack: newHistory,
-      redoStack: [...state.redoStack, currentContent],
+      historyStack: state.historyStack.slice(0, -1),
+      redoStack: [...state.redoStack, state.paperContent],
     });
-
-    return previousState;
+    return previous;
   },
 
   redo: () => {
     const state = get();
     if (state.redoStack.length === 0) return null;
-
-    const nextState = state.redoStack[state.redoStack.length - 1];
-    const newRedo = state.redoStack.slice(0, -1);
-
-    // Get current content for history
-    const currentFile = state.activeProject?.files.find(
-      (f) => f.id === state.activeFileId
-    );
-    const currentContent = currentFile?.content || '';
-
+    const next = state.redoStack[state.redoStack.length - 1];
     set({
-      historyStack: [...state.historyStack, currentContent],
-      redoStack: newRedo,
+      historyStack: [...state.historyStack, state.paperContent],
+      redoStack: state.redoStack.slice(0, -1),
     });
-
-    return nextState;
+    return next;
   },
 
   reset: () => set(initialState),

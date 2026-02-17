@@ -143,7 +143,7 @@ class AIClient:
             logger.error("Ollama provider requested but langchain_ollama not installed. Falling back to Gemini.")
             self._init_gemini()
             return
-        base_url = settings.llm_base_url or "http://localhost:11434"
+        base_url = settings.ollama_base_url or "http://localhost:11434"
         
         self.text_model = ChatOllama(
             model=settings.text_model_name, # e.g., "llama3"
@@ -168,7 +168,7 @@ class AIClient:
             logger.error("OpenAI provider requested but langchain_openai not installed. Falling back to Gemini.")
             self._init_gemini()
             return
-        base_url = settings.llm_base_url # Can be None for official OpenAI
+        base_url = getattr(settings, 'openai_base_url', None)  # Can be None for official OpenAI
         
         self.text_model = ChatOpenAI(
             model=settings.text_model_name,
