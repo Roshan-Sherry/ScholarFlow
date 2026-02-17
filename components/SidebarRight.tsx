@@ -5,7 +5,7 @@ import { AgentAvatar } from './AgentAvatar';
 // import { MOCK_PAPERS } from '../constants'; (Removed)
 import Markdown from 'react-markdown';
 import { useStreamingChat, useStreamingDraft } from '../hooks/useStreaming';
-import { generateOutline, fetchLibraryPage } from '../lib/api-client';
+import { generateOutline, fetchLibraryPage, saveDraft } from '../lib/api-client';
 
 interface SidebarRightProps {
     appMode: AppMode;
@@ -78,6 +78,7 @@ export const SidebarRight: React.FC<SidebarRightProps> = ({
     const [outline, setOutline] = useState<OutlineSection[]>([]);
     const [isGeneratingOutline, setIsGeneratingOutline] = useState(false);
     const [draftingSectionId, setDraftingSectionId] = useState<string | null>(null);
+    const [draftingSectionIds, setDraftingSectionIds] = useState<Set<string>>(new Set()); // For parallel drafting
     const [draftingAssetIds, setDraftingAssetIds] = useState<Set<string>>(new Set());
     const [assetPromptSectionId, setAssetPromptSectionId] = useState<string | null>(null);
     const [isAutoWriting, setIsAutoWriting] = useState(false);
@@ -176,6 +177,19 @@ export const SidebarRight: React.FC<SidebarRightProps> = ({
     useEffect(() => {
         setLibraryPageIndex(1);
     }, [activeProject?.id]);
+
+    // Auto-save outline when it changes
+    useEffect(() => {
+        if (!activeProject?.id || outline.length === 0) return;
+        
+        const saveTimer = setTimeout(() => {
+            saveDraft(activeProject.id, outline, null).catch(error => {
+                console.warn('Failed to auto-save outline:', error);
+            });
+        }, 2000); // Save after 2 seconds of inactivity
+        
+        return () => clearTimeout(saveTimer);
+    }, [activeProject?.id, outline]);
 
     // Fetch paginated library
     useEffect(() => {
@@ -291,7 +305,9 @@ export const SidebarRight: React.FC<SidebarRightProps> = ({
             // Call the proper planner API endpoint
             const sections = await generateOutline(
                 activeProject.id,
-                activeProject.papers.map(p => p.id),
+                selectedContextIds.size > 0
+                    ? Array.from(selectedContextIds)
+                    : activeProject.papers.map(p => p.id),
                 activeProject.assets ? activeProject.assets.map(a => a.id) : [],
                 'IEEE'
             );
@@ -308,8 +324,10 @@ export const SidebarRight: React.FC<SidebarRightProps> = ({
             setOutline(validated);
             if (addAgentLog) {
                 addAgentLog('Co-Author', `✓ Generated ${validated.length} sections`, 'success');
-                addAgentLog('Co-Author', 'Ready to start drafting! Select a section to begin.', 'info');
+                addAgentLog('Co-Author', 'Auto-drafting all sections now...', 'info');
             }
+
+            await handleAutoWriteAll(validated);
 
         } catch (e) {
             console.error('Outline generation error:', e);
@@ -318,11 +336,19 @@ export const SidebarRight: React.FC<SidebarRightProps> = ({
         finally { setIsGeneratingOutline(false); }
     };
 
-    const executeDraftSection = async (section: OutlineSection) => {
-        if (draftingSectionId || !onUpdateSection || !activeProject) return;
-        setDraftingSectionId(section.id);
+    const executeDraftSection = async (section: OutlineSection, isParallel: boolean = false) => {
+        // For single drafts, prevent concurrent execution unless in parallel mode
+        if (!isParallel && draftingSectionId) return;
+        if (!onUpdateSection || !activeProject) return;
+        
+        // Update tracking state
+        if (!isParallel) {
+            setDraftingSectionId(section.id);
+        } else {
+            setDraftingSectionIds(prev => new Set(prev).add(section.id));
+        }
         setAssetPromptSectionId(null);
-        if (addAgentLog) addAgentLog('Co-Author', `Drafting: ${section.title}...`);
+        if (addAgentLog) addAgentLog('Co-Author', `Drafting: ${section.title}...`, 'pending');
 
         // Collect selected assets
         const selectedAssetIds = Array.from(draftingAssetIds);
@@ -330,39 +356,55 @@ export const SidebarRight: React.FC<SidebarRightProps> = ({
         try {
             setOutline(prev => prev.map(s => s.id === section.id ? { ...s, status: 'drafting' } : s));
 
-            let accumulatedText = "";
+            let displayedUpTo = 0; // Track what we've displayed so far
 
             await streamDraft({
                 project_id: activeProject.id,
                 message: `Draft section: ${section.title}. Description: ${section.description}`,
                 selected_paper_ids: section.relevantPaperIds,
                 lab_asset_ids: selectedAssetIds
-            }, (chunk) => {
-                accumulatedText += chunk;
+            }, (accumulatedText) => {
+                // Only update with new text that hasn't been displayed yet
+                // This ensures smooth word-by-word typing effect
                 onUpdateSection(section.title, accumulatedText, 'replace');
-            });
+            }, undefined, 25); // 25ms word delay for typing effect
 
             setOutline(prev => prev.map(s => s.id === section.id ? { ...s, status: 'completed' } : s));
-            if (addAgentLog) addAgentLog('Co-Author', `Finished ${section.title}.`, 'success');
-        } catch (e) { console.error("Drafting failed", e); }
-        finally { setDraftingSectionId(null); }
+            if (addAgentLog) addAgentLog('Co-Author', `✓ Drafted "${section.title}"`, 'success');
+        } catch (e) { 
+            console.error("Drafting failed", e); 
+            if (addAgentLog) addAgentLog('Co-Author', `✗ Failed to draft "${section.title}"`, 'error');
+            setOutline(prev => prev.map(s => s.id === section.id ? { ...s, status: 'pending' } : s));
+        }
+        finally { 
+            if (!isParallel) {
+                setDraftingSectionId(null);
+            } else {
+                setDraftingSectionIds(prev => {
+                    const next = new Set(prev);
+                    next.delete(section.id);
+                    return next;
+                });
+            }
+        }
     };
 
-    const handleAutoWriteAll = async () => {
+    const handleAutoWriteAll = async (sectionsOverride?: OutlineSection[]) => {
         if (isAutoWriting) return;
         setIsAutoWriting(true);
-        if (addAgentLog) addAgentLog('Co-Author', 'Starting Auto-Write Sequence...');
+        if (addAgentLog) addAgentLog('Co-Author', '🚀 Starting parallel drafting of all sections...', 'pending');
 
-        const pendingSections = outline.filter(s => s.status === 'pending');
+        const pendingSections = (sectionsOverride || outline).filter(s => s.status === 'pending');
 
-        for (const section of pendingSections) {
-            await executeDraftSection(section);
-            // Small pause between sections
-            await new Promise(r => setTimeout(r, 1000));
-        }
+        // Draft all sections in parallel for maximum speed
+        const draftPromises = pendingSections.map(section => 
+            executeDraftSection(section, true) // Pass true for parallel mode
+        );
+
+        await Promise.all(draftPromises);
 
         setIsAutoWriting(false);
-        if (addAgentLog) addAgentLog('Co-Author', 'Auto-Write Sequence Complete.', 'success');
+        if (addAgentLog) addAgentLog('Co-Author', `✨ All ${pendingSections.length} sections drafted successfully!`, 'success');
     };
 
     const handleDraftClick = (section: OutlineSection) => {
@@ -542,7 +584,7 @@ export const SidebarRight: React.FC<SidebarRightProps> = ({
                                                     <span className="text-[10px] font-bold text-gray-500 uppercase">Structure</span>
                                                     {!isAutoWriting && outline.some(s => s.status === 'pending') && (
                                                         <button
-                                                            onClick={handleAutoWriteAll}
+                                                            onClick={() => handleAutoWriteAll()}
                                                             className="flex items-center gap-1 text-[10px] font-bold text-indigo-400 hover:text-indigo-300 transition-colors"
                                                         >
                                                             <PlayCircle className="w-3 h-3" /> Auto-Write All
@@ -558,7 +600,7 @@ export const SidebarRight: React.FC<SidebarRightProps> = ({
                                                 {/* Sections List */}
                                                 {outline.map((section, index) => {
                                                     const isDrafted = section.status === 'completed';
-                                                    const isDraftingThis = draftingSectionId === section.id;
+                                                    const isDraftingThis = draftingSectionId === section.id || draftingSectionIds.has(section.id);
                                                     const isExpanded = expandedSectionId === section.id;
 
                                                     return (
@@ -613,7 +655,7 @@ export const SidebarRight: React.FC<SidebarRightProps> = ({
                                                                         ) : (
                                                                             <button
                                                                                 onClick={() => handleDraftClick(section)}
-                                                                                disabled={draftingSectionId !== null || isAutoWriting}
+                                                                                disabled={(draftingSectionId !== null && draftingSectionId !== section.id) || isAutoWriting}
                                                                                 className={`w-full py-1.5 rounded text-[10px] font-bold uppercase tracking-wide flex items-center justify-center gap-2 transition-colors ${isDraftingThis ? 'bg-indigo-900/20 text-indigo-400' : 'bg-[#1e2025] text-gray-400 hover:bg-gray-800 hover:text-white border border-gray-800'
                                                                                     }`}
                                                                             >
@@ -698,67 +740,53 @@ export const SidebarRight: React.FC<SidebarRightProps> = ({
                                 {activeTab === 'LIBRARY' && (
                                     <div className="space-y-3 pb-4">
                                         <div className="text-[10px] font-bold text-gray-500 uppercase tracking-wider px-1">
-                                            Connected Papers ({libraryPage?.total ?? projectPapers.length})
+                                            Selected Context ({selectedContextIds.size})
                                         </div>
-                                        {isLibraryLoading ? (
-                                            <div className="text-center py-6 text-gray-600 italic text-xs border border-dashed border-gray-800 rounded">
-                                                Loading library...
-                                            </div>
-                                        ) : (libraryPage?.items?.length ?? projectPapers.length) === 0 ? (
-                                            <div className="text-center py-6 text-gray-600 italic text-xs border border-dashed border-gray-800 rounded">
-                                                No papers connected to this project.
+                                        
+                                        {selectedContextIds.size === 0 ? (
+                                            <div className="text-center py-6 px-3 text-gray-600 italic text-xs border border-dashed border-gray-700 rounded space-y-3">
+                                                <p>No papers selected for this draft.</p>
+                                                <p className="text-gray-500 text-[9px]">Go to Research mode to select papers for context.</p>
+                                                <button
+                                                    onClick={() => window.location.hash = '#research'}
+                                                    className="w-full py-2 px-3 bg-indigo-600 hover:bg-indigo-500 text-white text-xs font-bold rounded transition-colors"
+                                                >
+                                                    Go to Research Mode
+                                                </button>
                                             </div>
                                         ) : (
                                             <div className="space-y-2">
-                                                {(libraryPage?.items || projectPapers).map(paper => (
-                                                    <div key={paper.id} className="bg-[#18181b] border border-gray-800 rounded-lg p-3 hover:border-indigo-500/50 transition-colors group">
-                                                        <div className="flex justify-between items-start gap-2">
-                                                            <div className="min-w-0">
-                                                                <div className="text-xs font-bold text-gray-300 leading-tight mb-1">{paper.title}</div>
-                                                                <div className="text-[10px] text-gray-500">{paper.authors[0]} • {paper.year}</div>
-                                                            </div>
-                                                            <div className="flex flex-col gap-1 opacity-0 group-hover:opacity-100 transition-opacity">
-                                                                <button
-                                                                    onClick={() => handleSendMessage(`What are the key findings of "${paper.title}"?`)}
-                                                                    className="p-1.5 bg-gray-800 hover:bg-gray-700 rounded text-gray-400 hover:text-white"
-                                                                    title="Ask about this paper"
-                                                                >
-                                                                    <MessageSquare className="w-3 h-3" />
-                                                                </button>
-                                                                <button
-                                                                    onClick={() => {
-                                                                        navigator.clipboard.writeText(`\\cite{${paper.id}}`);
-                                                                        if (addAgentLog) addAgentLog('System', 'Citation copied to clipboard.');
-                                                                    }}
-                                                                    className="p-1.5 bg-gray-800 hover:bg-gray-700 rounded text-gray-400 hover:text-white"
-                                                                    title="Copy Citation Key"
-                                                                >
-                                                                    <Quote className="w-3 h-3" />
-                                                                </button>
+                                                {projectPapers
+                                                    .filter(paper => selectedContextIds.has(paper.id))
+                                                    .map(paper => (
+                                                        <div key={paper.id} className="bg-[#18181b] border border-gray-800 rounded-lg p-3 hover:border-indigo-500/50 transition-colors group">
+                                                            <div className="flex justify-between items-start gap-2">
+                                                                <div className="min-w-0">
+                                                                    <div className="text-xs font-bold text-gray-300 leading-tight mb-1">{paper.title}</div>
+                                                                    <div className="text-[10px] text-gray-500">{paper.authors[0]} • {paper.year}</div>
+                                                                </div>
+                                                                <div className="flex flex-col gap-1 opacity-0 group-hover:opacity-100 transition-opacity">
+                                                                    <button
+                                                                        onClick={() => handleSendMessage?.(`What are the key findings of "${paper.title}"?`)}
+                                                                        className="p-1.5 bg-gray-800 hover:bg-gray-700 rounded text-gray-400 hover:text-white"
+                                                                        title="Ask about this paper"
+                                                                    >
+                                                                        <MessageSquare className="w-3 h-3" />
+                                                                    </button>
+                                                                    <button
+                                                                        onClick={() => {
+                                                                            navigator.clipboard.writeText(`\\cite{${paper.id}}`);
+                                                                            if (addAgentLog) addAgentLog('System', 'Citation copied to clipboard.');
+                                                                        }}
+                                                                        className="p-1.5 bg-gray-800 hover:bg-gray-700 rounded text-gray-400 hover:text-white"
+                                                                        title="Copy Citation Key"
+                                                                    >
+                                                                        <Quote className="w-3 h-3" />
+                                                                    </button>
+                                                                </div>
                                                             </div>
                                                         </div>
-                                                    </div>
-                                                ))}
-                                            </div>
-                                        )}
-
-                                        {(libraryPage?.pages || 1) > 1 && (
-                                            <div className="flex items-center justify-between pt-2 text-[10px] text-gray-500">
-                                                <button
-                                                    onClick={() => setLibraryPageIndex(prev => Math.max(1, prev - 1))}
-                                                    disabled={libraryPageIndex <= 1}
-                                                    className="px-2 py-1 rounded border border-gray-800 disabled:opacity-50"
-                                                >
-                                                    Prev
-                                                </button>
-                                                <span className="font-semibold">Page {libraryPageIndex} of {libraryPage?.pages || 1}</span>
-                                                <button
-                                                    onClick={() => setLibraryPageIndex(prev => Math.min(libraryPage?.pages || 1, prev + 1))}
-                                                    disabled={libraryPageIndex >= (libraryPage?.pages || 1)}
-                                                    className="px-2 py-1 rounded border border-gray-800 disabled:opacity-50"
-                                                >
-                                                    Next
-                                                </button>
+                                                    ))}
                                             </div>
                                         )}
                                     </div>

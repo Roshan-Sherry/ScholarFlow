@@ -4,13 +4,13 @@ from fastapi import APIRouter, Depends, HTTPException
 from fastapi.responses import StreamingResponse
 from sqlalchemy.orm import Session
 from pydantic import BaseModel
-from typing import List, Optional, Dict
+from typing import List, Optional, Dict, Any
 import json
 import asyncio
 import logging
 
-from app.models.database import get_db, Project, LibraryItem
-from app.models.schemas import OutlineRequest, OutlineResponse, OutlineSection
+from app.models.database import get_db, Project, LibraryItem, Draft
+from app.models.schemas import OutlineRequest, OutlineResponse, OutlineSection, SaveDraftRequest, DraftResponse
 from app.services.query_analyzer import query_analyzer
 from app.services.paper_search import search_all_sources
 from app.core.ai_client import ai_client
@@ -278,18 +278,19 @@ async def generate_outline(
         if not project:
             raise HTTPException(status_code=404, detail="Project not found")
         
-        # Fetch selected papers
-        papers = db.query(LibraryItem).filter(
-            LibraryItem.id.in_(request.paper_ids),
-            LibraryItem.project_id == request.project_id
-        ).all()
+        # Fetch selected papers (optional)
+        papers = []
+        if request.paper_ids:
+            papers = db.query(LibraryItem).filter(
+                LibraryItem.id.in_(request.paper_ids),
+                LibraryItem.project_id == request.project_id
+            ).all()
         
         if not papers:
-            logger.warning(f"No papers found for outline generation in project {request.project_id}")
-            return OutlineResponse(sections=[])
+            logger.warning(f"No papers found for outline generation in project {request.project_id}. Generating generic outline.")
         
         # Build context for planner
-        paper_context = "\n".join([f"- {p.title}: {p.abstract[:200]}..." for p in papers])
+        paper_context = "\n".join([f"- {p.title}: {p.abstract[:200]}..." for p in papers]) if papers else "No papers selected."
         
         # Run planner agent
         from app.agents.graph import planner_node
@@ -323,10 +324,26 @@ async def generate_outline(
                     recommended_asset_types=[]
                 )
             elif current_section and line.strip():
-                current_section.description += line + "\n"
+                if line.lower().startswith("description:"):
+                    current_section.description += line.replace("Description:", "", 1).strip() + "\n"
+                else:
+                    current_section.description += line + "\n"
         
         if current_section:
             sections.append(current_section)
+
+        # Fallback: if parsing failed, create a default outline
+        if not sections:
+            default_titles = ["Introduction", "Methods", "Results", "Discussion", "Conclusion"]
+            sections = [
+                OutlineSection(
+                    title=title,
+                    description="",
+                    relevant_paper_ids=request.paper_ids,
+                    recommended_asset_types=[]
+                )
+                for title in default_titles
+            ]
         
         logger.info(f"Generated outline with {len(sections)} sections for project {request.project_id}")
         
@@ -336,3 +353,100 @@ async def generate_outline(
         logger.error(f"Error generating outline: {e}", exc_info=True)
         # Return empty outline on error
         return OutlineResponse(sections=[])
+
+# ===== DRAFT PERSISTENCE =====
+
+@router.post("/draft/save")
+async def save_draft(
+    request: SaveDraftRequest,
+    db: Session = Depends(get_db)
+):
+    """Save draft outline and content for a project"""
+    try:
+        project = db.query(Project).filter(Project.id == request.project_id).first()
+        if not project:
+            raise HTTPException(status_code=404, detail="Project not found")
+        
+        # Get or create draft for this project
+        draft = db.query(Draft).filter(Draft.project_id == request.project_id).first()
+        
+        if not draft:
+            draft = Draft(project_id=request.project_id)
+            db.add(draft)
+        
+        # Update outline if provided
+        if request.outline is not None:
+            draft.outline = request.outline
+        
+        # Update content if provided
+        if request.content is not None:
+            draft.full_content = request.content
+            # Update word count
+            draft.word_count = len(request.content.split())
+        
+        db.commit()
+        db.refresh(draft)
+        
+        logger.info(f"Saved draft for project {request.project_id}")
+        
+        return {
+            "id": draft.id,
+            "project_id": draft.project_id,
+            "outline": draft.outline,
+            "full_content": draft.full_content,
+            "word_count": draft.word_count,
+            "created_at": draft.created_at.isoformat() if draft.created_at else None,
+            "updated_at": draft.updated_at.isoformat() if draft.updated_at else None
+        }
+    
+    except HTTPException:
+        raise
+    except Exception as e:
+        db.rollback()
+        logger.error(f"Error saving draft: {e}", exc_info=True)
+        raise HTTPException(status_code=500, detail=str(e))
+
+
+@router.get("/draft/load/{project_id}")
+async def load_draft(
+    project_id: str,
+    db: Session = Depends(get_db)
+):
+    """Load saved draft outline and content for a project"""
+    try:
+        project = db.query(Project).filter(Project.id == project_id).first()
+        if not project:
+            raise HTTPException(status_code=404, detail="Project not found")
+        
+        # Get draft if exists
+        draft = db.query(Draft).filter(Draft.project_id == project_id).first()
+        
+        if not draft:
+            # Return empty draft if none exists
+            return {
+                "id": None,
+                "project_id": project_id,
+                "outline": None,
+                "full_content": None,
+                "word_count": 0,
+                "created_at": None,
+                "updated_at": None
+            }
+        
+        logger.info(f"Loaded draft for project {project_id}")
+        
+        return {
+            "id": draft.id,
+            "project_id": draft.project_id,
+            "outline": draft.outline,
+            "full_content": draft.full_content,
+            "word_count": draft.word_count,
+            "created_at": draft.created_at.isoformat() if draft.created_at else None,
+            "updated_at": draft.updated_at.isoformat() if draft.updated_at else None
+        }
+    
+    except HTTPException:
+        raise
+    except Exception as e:
+        logger.error(f"Error loading draft: {e}", exc_info=True)
+        raise HTTPException(status_code=500, detail=str(e))

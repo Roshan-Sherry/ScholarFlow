@@ -627,10 +627,119 @@ async def writer_node(state: ResearchState) -> Dict:
     
     from app.agents.prompts import format_section_prompt, get_context_weights
     from app.models.database import ResearchAsset
+    from app.core.ai_client import ai_client
     
     query = state["query"]
     selected_paper_ids = state["selected_paper_ids"]
     research_asset_ids = state.get("research_asset_ids", [])
+    
+    current_draft = state.get("current_draft", {})
+    
+    # Check if we are in "Outline Generated" state -> Trigger Parallel Drafting
+    if current_draft.get("status") == "outline_generated":
+        sections_plan = current_draft.get("sections_plan", [])
+        if not sections_plan:
+            # Fallback if no plan
+            current_draft["status"] = "drafting"
+            return {"current_draft": current_draft} 
+            
+        log_entry = {
+            "step": "writer",
+            "source": "Writer",
+            "message": f"🚀 Starting parallel drafting for {len(sections_plan)} sections...",
+            "status": "processing"
+        }
+        
+        # === PREPARE CONTEXT (Shared for all sections) ===
+        # 1. Get literature context
+        literature_context = ""
+        if selected_paper_ids:
+            project_id = state["project_id"]
+            context_chunks = await vector_store.search_similar(
+                project_id,
+                query,
+                paper_ids=selected_paper_ids,
+                top_k=8 
+            )
+            literature_context = "\n\n".join(context_chunks) if context_chunks else ""
+            
+        # 2. Get research context
+        research_context = ""
+        db = next(get_db())
+        try:
+            if research_asset_ids:
+                research_assets = db.query(ResearchAsset).filter(
+                    ResearchAsset.id.in_(research_asset_ids)
+                ).all()
+                research_parts = []
+                for asset in research_assets:
+                    asset_info = f"**{asset.name}** ({asset.asset_type})"
+                    if asset.description: asset_info += f": {asset.description}"
+                    if asset.ai_analysis: asset_info += f"\nAnalysis: {asset.ai_analysis}"
+                    research_parts.append(asset_info)
+                research_context = "\n\n".join(research_parts)
+        finally:
+            db.close()
+            
+        # === PREPARE BATCH PROMPTS ===
+        prompts = []
+        section_titles = []
+        
+        for section in sections_plan:
+            title = section.get("title", "Section")
+            desc = section.get("description", "")
+            
+            research_weight, lit_weight = get_context_weights(title)
+            
+            section_prompt = format_section_prompt(
+                title,
+                query,
+                literature_context=literature_context,
+                research_context=research_context
+            )
+            section_prompt += f"\n\nSpecific Focus for this part: {desc}"
+            
+            prompts.append(section_prompt)
+            section_titles.append(title)
+            
+        # === EXECUTE PARALLEL GENERATION ===
+        draft_results = await ai_client.generate_batch(
+            prompts,
+            temperature=0.7,
+            mode="studio" 
+        )
+        
+        # === ASSEMBLE RESULT ===
+        final_content_parts = []
+        logs = [log_entry]
+        total_words = 0
+        
+        for i, text in enumerate(draft_results):
+            title = section_titles[i]
+            word_count = len(text.split())
+            total_words += word_count
+            
+            final_content_parts.append(f"## {title}\n\n{text}")
+            
+            # Log each section completion for "Show Drafting Process"
+            logs.append({
+                "step": "writer",
+                "source": "Writer",
+                "message": f"✓ Drafted '{title}' ({word_count} words)",
+                "status": "completed"
+            })
+            
+        full_content = "\n\n".join(final_content_parts)
+        
+        return {
+            "current_draft": {
+                "section": "Full Manuscript",
+                "content": full_content,
+                "status": "pending_review"
+            },
+            "logs": logs
+        }
+
     current_section = state.get("current_section", "general")
     lab_descriptions = state.get("lab_asset_descriptions", [])
     revision_count = state.get("revision_count", 0)

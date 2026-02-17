@@ -369,7 +369,7 @@ Write 2-4 paragraphs of scholarly text with citations [1], [2] where appropriate
         yield f"data: {json.dumps({'type': 'start', 'message': 'Drafting section...'})}\n\n"
         
         accumulated_text = ""
-        async for chunk in ai_client.generate_text_stream(prompt):
+        async for chunk in ai_client.generate_text_stream(prompt, use_flash=True):
             accumulated_text += chunk
             yield f"data: {json.dumps({'type': 'text_chunk', 'data': chunk})}\n\n"
             await asyncio.sleep(0.02)

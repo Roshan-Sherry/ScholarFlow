@@ -430,7 +430,8 @@ Return ONLY a decimal number between 0.0 and 1.0."""
         prompts: List[str],
         temperature: float = 0.7,
         max_tokens: int = 2048,
-        use_flash: bool = False
+        use_flash: bool = False,
+        mode: str = "general"
     ) -> List[str]:
         """Generate multiple responses in parallel for faster multi-agent workflows"""
         import asyncio
@@ -439,7 +440,7 @@ Return ONLY a decimal number between 0.0 and 1.0."""
         start = time.time()
         
         tasks = [
-            self.generate_text(prompt, temperature, max_tokens, use_flash)
+            self.generate_text(prompt, temperature, max_tokens, use_flash, mode=mode)
             for prompt in prompts
         ]
         

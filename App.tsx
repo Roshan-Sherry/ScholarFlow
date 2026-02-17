@@ -38,7 +38,7 @@ export default function App() {
     } = useProjectStore();
 
     const {
-        agentState, agentLogs, pendingMessage,
+        agentState, agentLogs, pendingMessage, isStreaming,
         setAgentState, addAgentLog, setPendingMessage
     } = useAgentStore();
 
@@ -664,6 +664,7 @@ export default function App() {
                             canUndo={historyStack.length > 0}
                             canRedo={redoStack.length > 0}
                             onOpenPaper={handleOpenPaper}
+                            isStreaming={isStreaming}
                         />
                     )
                 }

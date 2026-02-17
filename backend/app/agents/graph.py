@@ -82,13 +82,22 @@ AVAILABLE SOURCES: {len(selected_paper_ids)} research papers
 AVAILABLE DATA: {len(lab_asset_ids)} lab assets
 
 Create a logical outline with 4-6 sections (e.g., Introduction, Methods, Results, Discussion, Conclusion).
-For each section, provide:
-- Title
-- Brief description (what should be covered)
 
-Return a structured outline."""
+Return EXACTLY this format so it can be parsed:
+
+## Section Title
+Description: 2-4 sentences describing what this section should cover.
+
+## Section Title
+Description: 2-4 sentences describing what this section should cover.
+
+Rules:
+- Use markdown heading syntax with "## " for each section title
+- Always include a "Description:" line under each heading
+- No extra commentary before or after the sections
+"""
     
-    outline_text = await ai_client.generate_text(prompt, temperature=0.7)
+    outline_text = await ai_client.generate_text(prompt, temperature=0.5, use_flash=True)
     
     return {
         "current_draft": {

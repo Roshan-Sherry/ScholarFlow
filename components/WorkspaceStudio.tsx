@@ -11,6 +11,9 @@ import { Project } from '../types';
 import Editor, { loader } from '@monaco-editor/react';
 import Markdown from 'react-markdown';
 import { useToastStore } from '../stores/toastStore';
+import { SimpleTextEditor } from './SimpleTextEditor';
+import { LivePaperPreview } from './LivePaperPreview';
+import { saveDraft, loadDraft } from '../lib/api-client';
 
 // --- CONSTANTS FOR A4 LAYOUT ---
 const A4_W_MM = 210;
@@ -194,6 +197,7 @@ interface WorkspaceStudioProps {
     canUndo?: boolean;
     canRedo?: boolean;
     onOpenPaper?: (paperId: string, page?: number, highlightText?: string) => void;
+    isStreaming?: boolean;
 }
 
 export const WorkspaceStudio: React.FC<WorkspaceStudioProps> = ({
@@ -205,7 +209,8 @@ export const WorkspaceStudio: React.FC<WorkspaceStudioProps> = ({
     onRedo,
     canUndo,
     canRedo,
-    onOpenPaper
+    onOpenPaper,
+    isStreaming = false
 }) => {
     // --- STATE ---
     const [viewMode, setViewMode] = useState<'visual' | 'source'>('visual');
@@ -226,6 +231,7 @@ export const WorkspaceStudio: React.FC<WorkspaceStudioProps> = ({
 
     const [fontSize, setFontSize] = useState(11); // pt
     const [lineHeight, setLineHeight] = useState(1.5);
+    const [citationFormat, setCitationFormat] = useState<'IEEE' | 'APA' | 'Chicago' | 'MLA'>('IEEE');
     const { addToast } = useToastStore();
 
     // Editor State
@@ -283,6 +289,37 @@ export const WorkspaceStudio: React.FC<WorkspaceStudioProps> = ({
             behavior: 'smooth'
         });
     };
+
+    // --- DRAFT PERSISTENCE (Load on Mount) ---
+    useEffect(() => {
+        if (!activeProject?.id) return;
+        
+        const loadSavedDraft = async () => {
+            try {
+                const draft = await loadDraft(activeProject.id);
+                if (draft.full_content && draft.full_content !== content) {
+                    onChange(draft.full_content);
+                }
+            } catch (error) {
+                console.warn('Failed to load draft:', error);
+            }
+        };
+        
+        loadSavedDraft();
+    }, [activeProject?.id]);
+
+    // --- DRAFT PERSISTENCE (Auto-save with Debounce) ---
+    useEffect(() => {
+        if (!activeProject?.id || !content) return;
+        
+        const saveTimer = setTimeout(() => {
+            saveDraft(activeProject.id, null, content).catch(error => {
+                console.warn('Failed to auto-save draft:', error);
+            });
+        }, 3000); // Save after 3 seconds of inactivity
+        
+        return () => clearTimeout(saveTimer);
+    }, [activeProject?.id, content]);
 
     // --- PARSING LOGIC (Markdown -> Blocks) ---
     useEffect(() => {
@@ -627,28 +664,26 @@ export const WorkspaceStudio: React.FC<WorkspaceStudioProps> = ({
                     </div>
                 </div>
             ) : (
-                /* 2. SOURCE CODE MODE */
-                <div className="flex-1 bg-[#1e1e1e] relative overflow-hidden">
-                    <Editor
-                        height="100%"
-                        defaultLanguage="markdown"
-                        theme="scholar-dark"
-                        value={content}
-                        onChange={(val) => onChange(val || '')}
-                        onMount={handleSourceEditorMount}
-                        options={{
-                            minimap: { enabled: true },
-                            fontSize: 14,
-                            fontFamily: 'JetBrains Mono, monospace',
-                            wordWrap: 'on',
-                            padding: { top: 32, bottom: 32 },
-                            lineNumbers: 'on',
-                            folding: true,
-                            scrollBeyondLastLine: false,
-                            renderValidationDecorations: 'on',
-                            bracketPairColorization: { enabled: true }
-                        }}
-                    />
+                /* 2. SOURCE CODE MODE - Simple Editor + Live Preview */
+                <div className="flex-1 flex relative overflow-hidden">
+                    {/* Left: Text Editor */}
+                    <div className="flex-1 border-r border-gray-300 overflow-hidden">
+                        <SimpleTextEditor
+                            content={content}
+                            onChange={onChange}
+                            citationFormat={citationFormat}
+                            onFormatChange={setCitationFormat}
+                            isStreaming={isStreaming}
+                        />
+                    </div>
+
+                    {/* Right: Live Preview */}
+                    <div className="flex-1 overflow-hidden">
+                        <LivePaperPreview
+                            content={content}
+                            citationFormat={citationFormat}
+                        />
+                    </div>
                 </div>
             )}
 

@@ -426,6 +426,8 @@ export const generateOutline = async (
       paper_ids: paperIds,
       asset_ids: assetIds,
       style
+    }, {
+      timeout: 120000
     });
     
     return data.sections || [];
@@ -522,5 +524,31 @@ export const fetchPaper = async (id: string): Promise<Paper> => {
    }
 };
 
-export default apiClient;
+// ===== DRAFT PERSISTENCE =====
+
+export const saveDraft = async (
+  projectId: string,
+  outline?: any[] | null,
+  content?: string | null
+): Promise<{ id: string; word_count: number; updated_at: string }> => {
+  const { data } = await apiClient.post(`/research/draft/save`, {
+    project_id: projectId,
+    outline,
+    content
+  });
+  return data;
+};
+
+export const loadDraft = async (projectId: string): Promise<{
+  id: string | null;
+  project_id: string;
+  outline: any[] | null;
+  full_content: string | null;
+  word_count: number;
+  created_at: string | null;
+  updated_at: string | null;
+}> => {
+  const { data } = await apiClient.get(`/research/draft/load/${projectId}`);
+  return data;
+};
 

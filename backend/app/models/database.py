@@ -167,6 +167,12 @@ class Draft(Base):
     # Content stored as JSON blocks
     content_blocks = Column(JSON)  # [{section: "Intro", text: "...", status: "completed"}]
     
+    # NEW: Full paper content (plain text or markdown)
+    full_content = Column(Text, nullable=True)
+    
+    # NEW: Outline/plan for the paper
+    outline = Column(JSON, nullable=True)  # [{id, title, description, status, relevantPaperIds}]
+    
     # Bibliography tracking
     bibliography = Column(JSON)  # [{key: "smith2020", bibtex: "..."}]
     

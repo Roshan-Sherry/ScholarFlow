@@ -233,6 +233,27 @@ class OutlineResponse(BaseModel):
     sections: List[OutlineSection]
 
 
+class SaveDraftRequest(BaseModel):
+    """Request schema for saving draft outline and content"""
+    project_id: str
+    outline: Optional[List[Dict[str, Any]]] = None  # List of outline sections
+    content: Optional[str] = None  # Full paper content
+
+
+class DraftResponse(BaseModel):
+    """Response schema for draft"""
+    id: str
+    project_id: str
+    outline: Optional[List[Dict[str, Any]]]
+    full_content: Optional[str]
+    word_count: int
+    created_at: datetime
+    updated_at: datetime
+    
+    class Config:
+        from_attributes = True
+
+
 # ===== SEARCH SCHEMAS =====
 
 class PaperSearchRequest(BaseModel):

@@ -140,11 +140,25 @@ export function useStreamingDraft() {
   
   const { setAgentState, addAgentLog, setIsStreaming: setStoreStreaming } = useAgentStore();
 
+  /**
+   * Sleep helper for word-by-word delays
+   */
+  const sleep = (ms: number) => new Promise(resolve => setTimeout(resolve, ms));
+
+  /**
+   * Split text into words with spacing preserved
+   * Returns array of words that can be displayed one-by-one
+   */
+  const splitIntoWords = (text: string): string[] => {
+    return text.split(/(\s+)/).filter(word => word.length > 0);
+  };
+
   const streamDraft = useCallback(
     async (
       payload: ChatStreamPayload,
       onTextChunk?: (chunk: string) => void,
-      onComplete?: (fullText: string) => void
+      onComplete?: (fullText: string) => void,
+      wordDelay: number = 20 // milliseconds between words
     ) => {
       setIsStreaming(true);
       setStoreStreaming(true);
@@ -152,16 +166,17 @@ export function useStreamingDraft() {
       setError(null);
 
       let accumulatedText = '';
+      const wordBuffer: string[] = [];
 
       try {
+        // Collect all text first in wordBuffer
         for await (const event of streamSectionDraft(payload)) {
           if (event.type === 'start') {
             addAgentLog('Writer', event.message || 'Starting draft...', 'pending');
           } else if (event.type === 'text_chunk' && event.data) {
-            accumulatedText += event.data;
-            if (onTextChunk) {
-              onTextChunk(event.data);
-            }
+            // Add chunk words to buffer for word-by-word rendering
+            const words = splitIntoWords(event.data);
+            wordBuffer.push(...words);
           } else if (event.type === 'complete') {
             if (event.data) {
               accumulatedText = event.data;
@@ -175,6 +190,23 @@ export function useStreamingDraft() {
             setError(event.message || 'Unknown error');
             setAgentState(AgentState.IDLE);
           }
+        }
+
+        // If we were able to collect text, stream it word-by-word
+        // Otherwise use accumulated from chunks
+        if (wordBuffer.length === 0 && accumulatedText) {
+          const words = splitIntoWords(accumulatedText);
+          wordBuffer.push(...words);
+        }
+
+        // Stream words one-by-one with delay for visual effect
+        accumulatedText = '';
+        for (const word of wordBuffer) {
+          accumulatedText += word;
+          if (onTextChunk) {
+            onTextChunk(accumulatedText);
+          }
+          await sleep(wordDelay);
         }
       } catch (err) {
         const errorMessage = err instanceof Error ? err.message : 'Streaming failed';

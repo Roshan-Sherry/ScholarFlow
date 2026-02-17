@@ -86,7 +86,8 @@ export const AgentAvatar: React.FC<AgentAvatarProps> = ({ state }) => {
       const talkStream = clientRef.current.createTalkMessageStream();
 
       // Call our backend chat endpoint
-      const response = await fetch('/api/v1/avatar/chat', {
+      const apiUrl = import.meta.env.VITE_API_URL || 'http://localhost:8000/api/v1';
+      const response = await fetch(`${apiUrl}/avatar/chat`, {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({
@@ -137,7 +138,8 @@ export const AgentAvatar: React.FC<AgentAvatarProps> = ({ state }) => {
     setIsConnecting(true);
     try {
       // 1. Get Session Token
-      const res = await fetch('/api/v1/avatar/session', {
+      const apiUrl = import.meta.env.VITE_API_URL || 'http://localhost:8000/api/v1';
+      const res = await fetch(`${apiUrl}/avatar/session`, {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' }
       });

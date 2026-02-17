@@ -9,17 +9,17 @@ aiofiles>=23.2.0
 sqlalchemy>=2.0.25
 alembic>=1.13.1
 
-# # LangChain Ecosystem (Modern 0.3.x Stack)
-# langchain>=0.3.0
-# langchain-core>=0.3.0
-# langchain-community>=0.3.0
-# langgraph>=0.2.45
+# LangChain Ecosystem (Modern 0.3.x Stack)
+langchain>=0.3.0
+langchain-core>=0.3.0
+langchain-community>=0.3.0
+langgraph>=0.2.45
 
-# # LLM Providers
-# langchain-google-genai>=2.0.0
-# google-generativeai>=0.8.0
-# # langchain-openai>=0.2.0
-# langchain-ollama>=0.2.0
+# LLM Providers
+langchain-google-genai>=2.0.0
+google-generativeai>=0.8.0
+# langchain-openai>=0.2.0
+langchain-ollama>=0.2.0
 
 # Paper Search and Processing
 scholarly
