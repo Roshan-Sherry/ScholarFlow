@@ -4,9 +4,10 @@ import urllib.request
 import urllib.parse
 import xml.etree.ElementTree as ET
 import sys
+import time
 
 def test_arxiv_search(query: str):
-    """Test ArXiv search with detailed logging"""
+    """Test ArXiv search with detailed logging and rate limit handling"""
     print(f"\n{'='*60}")
     print(f"Testing ArXiv API with query: '{query}'")
     print(f"{'='*60}\n")
@@ -27,10 +28,37 @@ def test_arxiv_search(query: str):
         
         print(f"1️⃣  API URL: {url}\n")
         
-        # Make request
-        print("2️⃣  Making HTTP request...")
-        with urllib.request.urlopen(url, timeout=15) as response:
-            data = response.read()
+        # Retry logic with exponential backoff
+        max_retries = 3
+        retry_count = 0
+        data = None
+        
+        while retry_count < max_retries:
+            # Make request
+            print(f"2️⃣  Making HTTP request (attempt {retry_count + 1}/{max_retries})...")
+            try:
+                with urllib.request.urlopen(url, timeout=15) as response:
+                    data = response.read()
+                    break  # Success
+                    
+            except urllib.error.HTTPError as http_err:
+                if http_err.code == 429:
+                    retry_count += 1
+                    if retry_count < max_retries:
+                        wait_time = 2 ** retry_count  # 2s, 4s, 8s
+                        print(f"⚠️  Rate limit (429). Waiting {wait_time}s before retry...")
+                        time.sleep(wait_time)
+                    else:
+                        print(f"❌ Rate limit exceeded after {max_retries} retries")
+                        print("\n💡 Tip: ArXiv limits requests to ~1 every 3 seconds")
+                        return False
+                else:
+                    print(f"❌ HTTP Error {http_err.code}: {http_err}")
+                    return False
+        
+        if data is None:
+            print("❌ Failed to retrieve data")
+            return False
         
         print(f"✓ Received {len(data)} bytes\n")
         

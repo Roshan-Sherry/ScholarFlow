@@ -3,15 +3,28 @@ import arxiv
 from typing import List, Dict, Optional
 import logging
 from pathlib import Path
+import time
+import asyncio
 
 logger = logging.getLogger(__name__)
 
 
 class ArxivClient:
-    """Client for searching and fetching papers from arXiv"""
+    """Client for searching and fetching papers from arXiv with rate limiting"""
     
     def __init__(self):
         self.client = arxiv.Client()
+        self.last_request_time = 0
+        self.min_delay = 3.0  # ArXiv recommends 3 seconds between requests
+    
+    def _wait_for_rate_limit(self):
+        """Ensure minimum delay between requests to respect ArXiv rate limits"""
+        elapsed = time.time() - self.last_request_time
+        if elapsed < self.min_delay:
+            sleep_time = self.min_delay - elapsed
+            logger.info(f"⏱️  Rate limiting: waiting {sleep_time:.1f}s before next request")
+            time.sleep(sleep_time)
+        self.last_request_time = time.time()
     
     def search(
         self,
@@ -72,16 +85,45 @@ class ArxivClient:
             
             logger.info(f"Calling ArXiv API: {url}")
             
-            # Use urllib with timeout to prevent hanging
-            try:
-                with urllib.request.urlopen(url, timeout=10) as response:
-                    data = response.read()
-            except urllib.error.URLError as url_err:
-                logger.error(f"URLError accessing ArXiv: {url_err}")
-                logger.error(f"Check network connection or ArXiv availability")
-                return []
-            except Exception as req_err:
-                logger.error(f"Request error: {req_err}", exc_info=True)
+            # Respect rate limits before making request
+            self._wait_for_rate_limit()
+            
+            # Retry logic with exponential backoff for rate limiting (429 errors)
+            max_retries = 3
+            retry_count = 0
+            data = None
+            
+            while retry_count < max_retries:
+                try:
+                    with urllib.request.urlopen(url, timeout=15) as response:
+                        data = response.read()
+                        break  # Success, exit retry loop
+                        
+                except urllib.error.HTTPError as http_err:
+                    if http_err.code == 429:  # Rate limit error
+                        retry_count += 1
+                        if retry_count < max_retries:
+                            wait_time = 2 ** retry_count  # Exponential backoff: 2s, 4s, 8s
+                            logger.warning(f"⚠️  ArXiv rate limit hit (429). Retry {retry_count}/{max_retries} after {wait_time}s...")
+                            time.sleep(wait_time)
+                        else:
+                            logger.error(f"❌ ArXiv rate limit exceeded after {max_retries} retries")
+                            return []
+                    else:
+                        logger.error(f"HTTP Error {http_err.code}: {http_err}")
+                        return []
+                        
+                except urllib.error.URLError as url_err:
+                    logger.error(f"URLError accessing ArXiv: {url_err}")
+                    logger.error(f"Check network connection or ArXiv availability")
+                    return []
+                    
+                except Exception as req_err:
+                    logger.error(f"Request error: {req_err}", exc_info=True)
+                    return []
+            
+            if data is None:
+                logger.error("Failed to retrieve data from ArXiv after retries")
                 return []
                 
             logger.info(f"Received {len(data)} bytes from ArXiv")
