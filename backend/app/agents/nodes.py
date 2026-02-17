@@ -181,6 +181,7 @@ async def search_node(state: ResearchState) -> Dict:
             if not optimized_query or not optimized_query.strip():
                 logger.warning("Optimized query was empty, falling back to original")
                 optimized_query = query
+            logger.info(f"Query optimized: '{query}' → '{optimized_query}'")
         except Exception as qa_err:
             logger.error(f"Query analysis failed: {qa_err}")
             optimized_query = query
@@ -360,7 +361,7 @@ Return ONLY the scores as a comma-separated list (e.g., "0.85, 0.72, 0.91, ...")
 Return exactly {len(found_papers)} scores in the same order."""
 
         # Get all scores at once
-        result = await ai_client.generate_text(batch_prompt, temperature=0.2, use_flash=False)
+        result = await ai_client.generate_text(batch_prompt, temperature=0.2, use_flash=True)
         
         # Parse scores
         score_strings = result.strip().split(',')

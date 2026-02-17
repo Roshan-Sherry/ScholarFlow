@@ -23,6 +23,7 @@ interface ProjectStore {
   
   // File operations
   updateFileContent: (fileId: string, content: string) => void;
+  updateSection: (fileId: string, sectionTitle: string, content: string, mode: 'append' | 'replace') => void;
   addFile: (file: ProjectFile) => void;
   deleteFile: (fileId: string) => void;
   
@@ -83,6 +84,46 @@ export const useProjectStore = create<ProjectStore>((set, get) => ({
 
       const updatedFiles = state.activeProject.files.map((f) =>
         f.id === fileId ? { ...f, content } : f
+      );
+
+      return {
+        activeProject: {
+          ...state.activeProject,
+          files: updatedFiles,
+        },
+      };
+    }),
+
+  updateSection: (fileId, sectionTitle, content, mode) =>
+    set((state) => {
+      if (!state.activeProject) return state;
+
+      // Get the current file content from the latest state
+      const currentFile = state.activeProject.files.find((f) => f.id === fileId);
+      if (!currentFile) return state;
+
+      const currentContent = currentFile.content;
+      const regex = new RegExp(`(## ${sectionTitle.replace(/[.*+?^${}()|[\]\\]/g, '\\$&')}\\n)([^#]*)`, 'i');
+      const match = currentContent.match(regex);
+
+      let newContent = currentContent;
+      if (match) {
+        if (mode === 'replace') {
+          newContent = currentContent.replace(regex, `$1${content}\n`);
+        } else {
+          // append mode
+          const currentSectionContent = match[2];
+          if (!currentSectionContent.trim().endsWith(content.trim())) {
+            newContent = currentContent.replace(regex, `$1$2\n${content}\n`);
+          }
+        }
+      } else {
+        // Section doesn't exist, append it
+        newContent = currentContent + `\n\n## ${sectionTitle}\n${content}`;
+      }
+
+      const updatedFiles = state.activeProject.files.map((f) =>
+        f.id === fileId ? { ...f, content: newContent } : f
       );
 
       return {

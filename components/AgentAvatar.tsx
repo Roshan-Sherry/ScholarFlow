@@ -56,20 +56,70 @@ export const AgentAvatar: React.FC<AgentAvatarProps> = ({ state }) => {
 
 
 
-  // -- NEW: Listen for Global Speech Events (e.g. from typed chat) --
-  const { avatarMessageToSpeak, setAvatarMessageToSpeak } = useAgentStore();
+  // -- NEW: Listen for Global Speech Events (Queue System) --
+  const {
+    speechQueue,
+    isAvatarSpeaking,
+    setAvatarSpeaking,
+    shiftSpeechQueue,
+    // Legacy support for any component not using queue directly
+    avatarMessageToSpeak
+  } = useAgentStore();
 
+  // Process Queue
   useEffect(() => {
-    if (avatarMessageToSpeak && clientRef.current && isConnected) {
+    const processNextMessage = async () => {
+      // Conditions to start speaking
+      if (!speechQueue.length || isAvatarSpeaking || !clientRef.current || !isConnected) {
+        return;
+      }
+
+      const message = speechQueue[0];
+      setAvatarSpeaking(true);
+
       try {
-        console.log("Avatar speaking (global trigger):", avatarMessageToSpeak);
-        clientRef.current.talk(avatarMessageToSpeak);
-        setAvatarMessageToSpeak(null); // Clear after triggering
+        console.log("Avatar speaking (queue):", message);
+
+        // 1. Trigger speech
+        // We assume client.talk MAY respond with a promise, but often TTS is fire-and-forget in SDKs
+        // without explicit event callbacks for 'ended'.
+        clientRef.current.talk(message);
+
+        // 2. Estimate duration to prevent overlap/cutoff
+        // Rule of thumb: ~150 words/minute -> ~400ms/word.
+        // Add 1.5s buffer for pauses and network latency.
+        const wordCount = message.split(/\s+/).length;
+        const estimatedDurationMs = Math.max(2500, (wordCount * 400) + 1000);
+
+        console.log(`Estimated speech duration: ${estimatedDurationMs}ms for ${wordCount} words`);
+
+        // Wait for estimated duration
+        await new Promise(resolve => setTimeout(resolve, estimatedDurationMs));
+
       } catch (e) {
         console.error("Failed to trigger avatar speech:", e);
+      } finally {
+        // 3. Cleanup and trigger next
+        shiftSpeechQueue(); // Remove the message we just finished (or timed out)
+        setAvatarSpeaking(false); // Release lock
       }
-    }
-  }, [avatarMessageToSpeak, isConnected, setAvatarMessageToSpeak]);
+    };
+
+    processNextMessage();
+  }, [speechQueue, isAvatarSpeaking, isConnected, setAvatarSpeaking, shiftSpeechQueue]);
+
+  // Handle legacy single-message trigger (pushes to queue via store logic now)
+  useEffect(() => {
+    // If store still exposes avatarMessageToSpeak and it changes, it means
+    // the legacy setter was called. The store logic directs it to queue, 
+    // but just in case we need to react to the state change itself:
+    // Actually, the store setter 'setAvatarMessageToSpeak' in our update 
+    // already redirects to 'speechQueue', so 'avatarMessageToSpeak' should remain null/unused
+    // or be ignored. We can remove this effect if we trust the store update.
+    // However, if the store update *also* sets the legacy state `avatarMessageToSpeak`, we should clear it.
+    // Our store update ONLY updates `speechQueue` when `setAvatarMessageToSpeak` is called.
+    // So `avatarMessageToSpeak` state will stay null.
+  }, [avatarMessageToSpeak]);
 
   const handleUserMessage = async (messageHistory: any[]) => {
     // Only respond to user messages

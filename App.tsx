@@ -34,7 +34,7 @@ export default function App() {
     const {
         activeProject, activeFileId, selectedContextIds, historyStack, redoStack,
         setActiveProject, setActiveFileId, toggleContext, addFile, deleteFile,
-        updateFileContent, pushHistory, undo, redo
+        updateFileContent, updateSection, pushHistory, undo, redo
     } = useProjectStore();
 
     const {
@@ -274,30 +274,11 @@ export default function App() {
     // --- CO-AUTHOR / AGENTIC ACTIONS ---
 
     const handleUpdateSection = (sectionTitle: string, content: string, mode: 'append' | 'replace' = 'append') => {
-        if (!activeProject) return;
+        if (!activeProject || !activeFileId) return;
 
-        // Don't push to history for every streamed chunk, only if manually replacing or starting
-        // Ideally we debounce history pushes for streaming, but for simplicity we rely on 'saveHistory=false' in stream
-
-        const regex = new RegExp(`(## ${sectionTitle}\\n)([^#]*)`, 'i');
-        const match = activeFileContent.match(regex);
-
-        let newFullContent = activeFileContent;
-        if (match) {
-            if (mode === 'replace') {
-                newFullContent = activeFileContent.replace(regex, `$1${content}\n`);
-            } else {
-                // Check if content already ends with this chunk to avoid duplication if streaming loosely
-                const currentSectionContent = match[2];
-                if (!currentSectionContent.trim().endsWith(content.trim())) {
-                    newFullContent = activeFileContent.replace(regex, `$1$2\n${content}\n`);
-                }
-            }
-        } else {
-            newFullContent = activeFileContent + `\n\n## ${sectionTitle}\n${content}`;
-        }
-
-        handleUpdateFileContent(newFullContent, false);
+        // Use the store's updateSection which reads the latest state
+        // This prevents race conditions during parallel drafting
+        updateSection(activeFileId, sectionTitle, content, mode);
     };
 
     const activeFile = activeProject?.files.find(f => f.id === activeFileId) || activeProject?.files[0];

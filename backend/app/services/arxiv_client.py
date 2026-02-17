@@ -73,8 +73,16 @@ class ArxivClient:
             logger.info(f"Calling ArXiv API: {url}")
             
             # Use urllib with timeout to prevent hanging
-            with urllib.request.urlopen(url, timeout=10) as response:
-                data = response.read()
+            try:
+                with urllib.request.urlopen(url, timeout=10) as response:
+                    data = response.read()
+            except urllib.error.URLError as url_err:
+                logger.error(f"URLError accessing ArXiv: {url_err}")
+                logger.error(f"Check network connection or ArXiv availability")
+                return []
+            except Exception as req_err:
+                logger.error(f"Request error: {req_err}", exc_info=True)
+                return []
                 
             logger.info(f"Received {len(data)} bytes from ArXiv")
             
@@ -83,6 +91,15 @@ class ArxivClient:
             
             # ArXiv API uses Atom namespace
             ns = {'atom': 'http://www.w3.org/2005/Atom', 'arxiv': 'http://arxiv.org/schemas/atom'}
+            
+            # Count entries
+            entries = root.findall('atom:entry', ns)
+            logger.info(f"Found {len(entries)} entries in XML response")
+            
+            if len(entries) == 0:
+                logger.warning(f"ArXiv returned 0 entries for query: '{query}'")
+                logger.warning("This may indicate the query is too specific or uses unsupported syntax")
+                return []
             
             results = []
             count = 0

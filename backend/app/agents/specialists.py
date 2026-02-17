@@ -648,7 +648,7 @@ As an expert research coordinator, evaluate this search:
 
 Return: decision|reasoning|suggestions"""
 
-        response = await ai_client.generate_text(prompt, temperature=0.4, use_flash=False)
+        response = await ai_client.generate_text(prompt, temperature=0.4, use_flash=True)
         
         # Parse response
         parts = response.split('|')

@@ -195,7 +195,7 @@ class AIClient:
         prompt: str,
         temperature: float = 0.7,
         max_tokens: int = 2048,
-        use_flash: bool = False,
+        use_flash: bool = True,
         mode: str = "general"  # "general", "search", "studio"
     ) -> str:
         """Generate text using either mock or real model
@@ -278,7 +278,7 @@ The effectiveness of CoT is highly dependent on the quality of the reasoning dem
         prompt: str,
         temperature: float = 0.7,
         max_tokens: int = 2048,
-        use_flash: bool = False
+        use_flash: bool = True
     ) -> AsyncIterator[str]:
         """Stream text generation"""
         if settings.mock_ai_responses:
@@ -413,7 +413,7 @@ Return ONLY a decimal number between 0.0 and 1.0."""
             
             try:
                 # Use search mode for optimized relevance scoring
-                result = await self.generate_text(prompt, temperature=0.2, use_flash=False, mode="search")
+                result = await self.generate_text(prompt, temperature=0.2, use_flash=True, mode="search")
                 # Cleanup potential non-numeric chars
                 clean_result = ''.join(c for c in result if c.isdigit() or c == '.')
                 score = float(clean_result)

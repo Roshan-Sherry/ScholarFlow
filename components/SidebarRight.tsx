@@ -1,6 +1,6 @@
 import React, { useRef, useEffect, useState } from 'react';
 import { AppMode, AgentState, AgentLog, Project, ProjectAsset, OutlineSection, ViewState, LibraryPage } from '../types';
-import { Activity, X, PanelLeftClose, PanelRightClose, Terminal, Cpu, Zap, Send, Loader2, FileImage, Table, Wand2, Database, Check, RefreshCw, ChevronDown, ChevronRight, MessageSquare, Sparkles, Eraser, PlayCircle, PenTool, BookOpen, Library, Quote } from 'lucide-react';
+import { Activity, X, PanelLeftClose, PanelRightClose, Terminal, Cpu, Zap, Send, Loader2, FileImage, Table, Wand2, Database, Check, RefreshCw, ChevronDown, ChevronRight, MessageSquare, Sparkles, Eraser, PlayCircle, PenTool, BookOpen, Library, Quote, PlusCircle } from 'lucide-react';
 import { AgentAvatar } from './AgentAvatar';
 // import { MOCK_PAPERS } from '../constants'; (Removed)
 import Markdown from 'react-markdown';
@@ -79,6 +79,7 @@ export const SidebarRight: React.FC<SidebarRightProps> = ({
     const [isGeneratingOutline, setIsGeneratingOutline] = useState(false);
     const [draftingSectionId, setDraftingSectionId] = useState<string | null>(null);
     const [draftingSectionIds, setDraftingSectionIds] = useState<Set<string>>(new Set()); // For parallel drafting
+    const [sectionContent, setSectionContent] = useState<Map<string, string>>(new Map()); // Store drafted content
     const [draftingAssetIds, setDraftingAssetIds] = useState<Set<string>>(new Set());
     const [assetPromptSectionId, setAssetPromptSectionId] = useState<string | null>(null);
     const [isAutoWriting, setIsAutoWriting] = useState(false);
@@ -133,6 +134,48 @@ export const SidebarRight: React.FC<SidebarRightProps> = ({
             }
         }
     }, [isStudio]);
+
+    // Load saved outline on mount
+    useEffect(() => {
+        if (activeProject?.id && isStudio) {
+            const savedOutline = localStorage.getItem(`outline_${activeProject.id}`);
+            if (savedOutline) {
+                try {
+                    const parsed = JSON.parse(savedOutline);
+                    setOutline(parsed);
+                    if (addAgentLog) addAgentLog('Co-Author', 'Loaded saved plan', 'success');
+                } catch (e) {
+                    console.error('Failed to load saved outline:', e);
+                }
+            }
+            
+            // Load saved section content
+            const savedContent = localStorage.getItem(`section_content_${activeProject.id}`);
+            if (savedContent) {
+                try {
+                    const parsed = JSON.parse(savedContent);
+                    setSectionContent(new Map(Object.entries(parsed)));
+                } catch (e) {
+                    console.error('Failed to load saved content:', e);
+                }
+            }
+        }
+    }, [activeProject?.id, isStudio]);
+
+    // Save outline to localStorage when it changes
+    useEffect(() => {
+        if (activeProject?.id && outline.length > 0) {
+            localStorage.setItem(`outline_${activeProject.id}`, JSON.stringify(outline));
+        }
+    }, [activeProject?.id, outline]);
+
+    // Save section content to localStorage when it changes
+    useEffect(() => {
+        if (activeProject?.id && sectionContent.size > 0) {
+            const obj = Object.fromEntries(sectionContent);
+            localStorage.setItem(`section_content_${activeProject.id}`, JSON.stringify(obj));
+        }
+    }, [activeProject?.id, sectionContent]);
 
     // Sync Plan with Editor Content
     // This ensures that if a user manually adds a header, it shows up in the plan,
@@ -322,6 +365,12 @@ export const SidebarRight: React.FC<SidebarRightProps> = ({
             }));
 
             setOutline(validated);
+            
+            // Save to localStorage
+            if (activeProject?.id) {
+                localStorage.setItem(`outline_${activeProject.id}`, JSON.stringify(validated));
+            }
+            
             if (addAgentLog) {
                 addAgentLog('Co-Author', `✓ Generated ${validated.length} sections`, 'success');
                 addAgentLog('Co-Author', 'Auto-drafting all sections now...', 'info');
@@ -356,7 +405,7 @@ export const SidebarRight: React.FC<SidebarRightProps> = ({
         try {
             setOutline(prev => prev.map(s => s.id === section.id ? { ...s, status: 'drafting' } : s));
 
-            let displayedUpTo = 0; // Track what we've displayed so far
+            let finalContent = '';
 
             await streamDraft({
                 project_id: activeProject.id,
@@ -364,13 +413,22 @@ export const SidebarRight: React.FC<SidebarRightProps> = ({
                 selected_paper_ids: section.relevantPaperIds,
                 lab_asset_ids: selectedAssetIds
             }, (accumulatedText) => {
-                // Only update with new text that hasn't been displayed yet
-                // This ensures smooth word-by-word typing effect
+                // Store the accumulated content
+                finalContent = accumulatedText;
+                // Update with new text for word-by-word typing effect
                 onUpdateSection(section.title, accumulatedText, 'replace');
             }, undefined, 25); // 25ms word delay for typing effect
 
+            // Ensure final content is in the paper (safety net)
+            if (finalContent) {
+                onUpdateSection(section.title, finalContent, 'replace');
+            }
+
+            // Store the final content for manual re-insertion if needed
+            setSectionContent(prev => new Map(prev).set(section.id, finalContent));
+
             setOutline(prev => prev.map(s => s.id === section.id ? { ...s, status: 'completed' } : s));
-            if (addAgentLog) addAgentLog('Co-Author', `✓ Drafted "${section.title}"`, 'success');
+            if (addAgentLog) addAgentLog('Co-Author', `✓ Drafted "${section.title}" and added to paper`, 'success');
         } catch (e) { 
             console.error("Drafting failed", e); 
             if (addAgentLog) addAgentLog('Co-Author', `✗ Failed to draft "${section.title}"`, 'error');
@@ -425,6 +483,33 @@ export const SidebarRight: React.FC<SidebarRightProps> = ({
         if (newSet.has(id)) newSet.delete(id);
         else newSet.add(id);
         setDraftingAssetIds(newSet);
+    };
+
+    const handleAddSectionToPaper = (section: OutlineSection) => {
+        if (!onUpdateSection) return;
+        
+        const content = sectionContent.get(section.id);
+        if (content) {
+            onUpdateSection(section.title, content, 'replace');
+            if (addAgentLog) addAgentLog('Co-Author', `✓ Re-inserted "${section.title}" to paper`, 'success');
+        } else {
+            if (addAgentLog) addAgentLog('Co-Author', `No content to add for "${section.title}"`, 'error');
+        }
+    };
+
+    const handleResetOutline = () => {
+        if (!activeProject?.id) return;
+        
+        if (confirm('Are you sure you want to reset the plan? This will clear all sections and drafts.')) {
+            setOutline([]);
+            setSectionContent(new Map());
+            setDraftingSectionId(null);
+            setDraftingSectionIds(new Set());
+            setExpandedSectionId(null);
+            localStorage.removeItem(`outline_${activeProject.id}`);
+            localStorage.removeItem(`section_content_${activeProject.id}`);
+            if (addAgentLog) addAgentLog('Co-Author', 'Plan reset', 'info');
+        }
     };
 
     // --- REWRITE / CRITIQUE LOGIC ---
@@ -582,19 +667,28 @@ export const SidebarRight: React.FC<SidebarRightProps> = ({
                                                 {/* Auto-Write Controls */}
                                                 <div className="flex items-center justify-between px-1 mb-2">
                                                     <span className="text-[10px] font-bold text-gray-500 uppercase">Structure</span>
-                                                    {!isAutoWriting && outline.some(s => s.status === 'pending') && (
+                                                    <div className="flex items-center gap-2">
                                                         <button
-                                                            onClick={() => handleAutoWriteAll()}
-                                                            className="flex items-center gap-1 text-[10px] font-bold text-indigo-400 hover:text-indigo-300 transition-colors"
+                                                            onClick={handleResetOutline}
+                                                            className="flex items-center gap-1 text-[10px] font-bold text-red-400 hover:text-red-300 transition-colors"
+                                                            title="Reset plan"
                                                         >
-                                                            <PlayCircle className="w-3 h-3" /> Auto-Write All
+                                                            <Eraser className="w-3 h-3" /> Reset
                                                         </button>
-                                                    )}
-                                                    {isAutoWriting && (
-                                                        <span className="flex items-center gap-1 text-[10px] font-bold text-indigo-400 animate-pulse">
-                                                            <PenTool className="w-3 h-3" /> Writing Paper...
-                                                        </span>
-                                                    )}
+                                                        {!isAutoWriting && outline.some(s => s.status === 'pending') && (
+                                                            <button
+                                                                onClick={() => handleAutoWriteAll()}
+                                                                className="flex items-center gap-1 text-[10px] font-bold text-indigo-400 hover:text-indigo-300 transition-colors"
+                                                            >
+                                                                <PlayCircle className="w-3 h-3" /> Auto-Write All
+                                                            </button>
+                                                        )}
+                                                        {isAutoWriting && (
+                                                            <span className="flex items-center gap-1 text-[10px] font-bold text-indigo-400 animate-pulse">
+                                                                <PenTool className="w-3 h-3" /> Writing Paper...
+                                                            </span>
+                                                        )}
+                                                    </div>
                                                 </div>
 
                                                 {/* Sections List */}
@@ -630,6 +724,17 @@ export const SidebarRight: React.FC<SidebarRightProps> = ({
                                                                     <p className="text-[10px] text-gray-500 mb-3 leading-relaxed border-l-2 border-gray-800 pl-2">
                                                                         {section.description}
                                                                     </p>
+                                                                )}
+
+                                                                {/* ADD TO PAPER BUTTON (If drafted and collapsed) */}
+                                                                {isDrafted && !isExpanded && (
+                                                                    <button
+                                                                        onClick={() => handleAddSectionToPaper(section)}
+                                                                        className="w-full py-1.5 rounded text-[10px] font-bold uppercase tracking-wide flex items-center justify-center gap-2 transition-colors bg-green-900/20 text-green-400 hover:bg-green-900/30 border border-green-800"
+                                                                    >
+                                                                        <PlusCircle className="w-3 h-3" />
+                                                                        Add to Paper
+                                                                    </button>
                                                                 )}
 
                                                                 {/* DRAFTING UI (If not drafted) */}
@@ -670,6 +775,15 @@ export const SidebarRight: React.FC<SidebarRightProps> = ({
                                                             {/* REVIEW UI (If drafted & expanded) */}
                                                             {isDrafted && isExpanded && (
                                                                 <div className="bg-black/20 border-t border-gray-800 p-3 space-y-3 animate-in slide-in-from-top-2">
+
+                                                                    {/* ADD TO PAPER Button */}
+                                                                    <button
+                                                                        onClick={() => handleAddSectionToPaper(section)}
+                                                                        className="w-full py-2 rounded text-[11px] font-bold uppercase tracking-wide flex items-center justify-center gap-2 transition-colors bg-green-600 hover:bg-green-500 text-white"
+                                                                    >
+                                                                        <PlusCircle className="w-4 h-4" />
+                                                                        Add to Paper
+                                                                    </button>
 
                                                                     <div className="flex justify-between items-center">
                                                                         <span className="text-[10px] font-bold text-gray-500 uppercase tracking-wider">Refine</span>

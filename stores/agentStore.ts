@@ -14,13 +14,15 @@ interface AgentStore {
   isStreaming: boolean;
 
   // Actions
-  setAgentState: (state: AgentState) => void;
-  addAgentLog: (source: AgentLog['source'], message: string, status?: AgentLog['status']) => void;
-  setPendingMessage: (message: string | null) => void;
-  setIsStreaming: (streaming: boolean) => void;
+  // Avatar Speech (Queue System)
+  speechQueue: string[];
+  isAvatarSpeaking: boolean;
+  queueAvatarSpeech: (message: string) => void;
+  setAvatarSpeaking: (speaking: boolean) => void;
+  shiftSpeechQueue: () => void;
   
-  // Avatar Speech
-  avatarMessageToSpeak: string | null;
+  // Deprecated/Legacy compatibility (optional, or just remove)
+  avatarMessageToSpeak: string | null; 
   setAvatarMessageToSpeak: (message: string | null) => void;
 
   clearLogs: () => void;
@@ -32,6 +34,9 @@ const initialState = {
   agentLogs: [],
   pendingMessage: null,
   isStreaming: false,
+  speechQueue: [],
+  isAvatarSpeaking: false,
+  avatarMessageToSpeak: null,
 };
 
 export const useAgentStore = create<AgentStore>((set) => ({
@@ -48,7 +53,7 @@ export const useAgentStore = create<AgentStore>((set) => ({
           source,
           message,
           timestamp: new Date(),
-          status,
+          status: status as AgentLog['status'],
         },
       ],
     })),
@@ -57,9 +62,24 @@ export const useAgentStore = create<AgentStore>((set) => ({
 
   setIsStreaming: (streaming) => set({ isStreaming: streaming }),
 
-  // Avatar Speech
-  avatarMessageToSpeak: null,
-  setAvatarMessageToSpeak: (message) => set({ avatarMessageToSpeak: message }),
+  // Avatar Speech Queue
+  queueAvatarSpeech: (message) => set((state) => ({ 
+    speechQueue: [...state.speechQueue, message] 
+  })),
+  
+  setAvatarSpeaking: (speaking) => set({ isAvatarSpeaking: speaking }),
+  
+  shiftSpeechQueue: () => set((state) => {
+    const newQueue = [...state.speechQueue];
+    newQueue.shift();
+    return { speechQueue: newQueue };
+  }),
+
+  // Legacy support (redirects to queue)
+  setAvatarMessageToSpeak: (message) => set((state) => {
+    if (!message) return {}; // Ignore null clear calls as queue handles lifecycle
+    return { speechQueue: [...state.speechQueue, message] };
+  }),
 
   clearLogs: () => set({ agentLogs: [] }),
 

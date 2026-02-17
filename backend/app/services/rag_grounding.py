@@ -298,8 +298,22 @@ async def generate_grounded_response(
             research_context=research_context or "No relevant past context found."
         )
     
-    # Generate response
-    response = await ai_client.generate_text(prompt, temperature=0.3)  # Low temp for accuracy
+    # Generate response using streaming for faster initial response
+    # Even though we accumulate the full response, streaming starts returning tokens immediately
+    response = ""
+    chunk_count = 0
+    try:
+        async for chunk in ai_client.generate_text_stream(prompt, temperature=0.3, use_flash=True):
+            response += chunk
+            chunk_count += 1
+            # Log progress every 50 chunks for debugging
+            if chunk_count % 50 == 0:
+                logger.debug(f"Generated {chunk_count} chunks, {len(response)} chars so far...")
+    except Exception as e:
+        logger.error(f"Error generating response: {e}")
+        response = ""
+    
+    logger.info(f"Response generation complete: {len(response)} chars from {chunk_count} chunks")
     
     if not response:
         logger.warning(f"AI Client returned empty response for query: {query}")
@@ -391,7 +405,7 @@ async def stream_grounded_response(
     # Stream response chunks
     full_response = ""
     try:
-        async for chunk in ai_client.generate_text_stream(prompt, temperature=0.3):
+        async for chunk in ai_client.generate_text_stream(prompt, temperature=0.3, use_flash=True):
             full_response += chunk
             yield {
                 "type": "chunk",

@@ -321,6 +321,11 @@ export const WorkspaceStudio: React.FC<WorkspaceStudioProps> = ({
         return () => clearTimeout(saveTimer);
     }, [activeProject?.id, content]);
 
+    // --- DEBUG: Track view mode and content ---
+    useEffect(() => {
+        console.log('[WorkspaceStudio] View mode:', viewMode, '| Content length:', content?.length, '| Blocks:', blocks.length);
+    }, [viewMode, content, blocks]);
+
     // --- PARSING LOGIC (Markdown -> Blocks) ---
     useEffect(() => {
         if (!content) return;
@@ -335,7 +340,7 @@ export const WorkspaceStudio: React.FC<WorkspaceStudioProps> = ({
         let buffer: string[] = [];
         let currentHeading = '';
 
-        const flush = (nextType: Block['type'], nextHeading: string = '') => {
+        const flush = (nextType?: Block['type'], nextHeading: string = '') => {
             if (buffer.length > 0 || currentType === 'title') {
                 if (currentType === 'title') {
                     const titleText = buffer[0]?.replace(/^#\s/, '') || 'Untitled';
@@ -345,18 +350,23 @@ export const WorkspaceStudio: React.FC<WorkspaceStudioProps> = ({
                         const authorText = buffer.slice(authorIdx + 1).join('\n').trim();
                         newBlocks.push({ id: 'meta-authors', type: 'authors', content: authorText });
                     }
-                } else {
-                    newBlocks.push({
-                        id: `blk-${newBlocks.length}`,
-                        type: currentType,
-                        heading: currentHeading,
-                        content: buffer.join('\n').trim()
-                    });
+                } else if (currentType === 'abstract' || currentType === 'section') {
+                    const blockContent = buffer.join('\n').trim();
+                    if (blockContent || currentHeading) {
+                        newBlocks.push({
+                            id: `blk-${newBlocks.length}`,
+                            type: currentType,
+                            heading: currentHeading,
+                            content: blockContent
+                        });
+                    }
                 }
             }
             buffer = [];
-            currentType = nextType;
-            currentHeading = nextHeading;
+            if (nextType) {
+                currentType = nextType;
+                currentHeading = nextHeading;
+            }
         };
 
         lines.forEach(line => {
@@ -368,10 +378,14 @@ export const WorkspaceStudio: React.FC<WorkspaceStudioProps> = ({
                 buffer.push(line);
             }
         });
-        flush('section', 'End');
-        setBlocks(newBlocks.filter(b => b.content || b.heading));
+        
+        // Flush remaining buffer without starting a new section
+        flush();
+        
+        console.log('[WorkspaceStudio] Parsed blocks:', newBlocks.length, newBlocks.map(b => ({ type: b.type, heading: b.heading, contentLength: b.content?.length })));
+        setBlocks(newBlocks);
 
-    }, [content]);
+    }, [content, editingBlockId]);
 
     // --- RECONSTRUCTION LOGIC ---
     const saveBlocks = (updatedBlocks: Block[]) => {
@@ -458,8 +472,8 @@ export const WorkspaceStudio: React.FC<WorkspaceStudioProps> = ({
                         <Printer className="w-4 h-4 text-indigo-600" /> Live Paper
                     </span>
 
-                    {/* VIEW TOGGLE */}
-                    <div className="flex bg-gray-100 p-1 rounded-lg border border-gray-200">
+                    {/* VIEW TOGGLE - Source mode commented out, only visual mode needed */}
+                    {/* <div className="flex bg-gray-100 p-1 rounded-lg border border-gray-200">
                         <button
                             onClick={() => setViewMode('visual')}
                             className={`flex items-center gap-2 px-3 py-1.5 rounded-md text-xs font-bold transition-all ${viewMode === 'visual' ? 'bg-white text-indigo-600 shadow-sm' : 'text-gray-500 hover:text-gray-700'}`}
@@ -474,13 +488,12 @@ export const WorkspaceStudio: React.FC<WorkspaceStudioProps> = ({
                             <Code className="w-3.5 h-3.5" />
                             Source
                         </button>
-                    </div>
+                    </div> */}
 
-                    <div className="h-4 w-px bg-gray-300"></div>
+                    {/* <div className="h-4 w-px bg-gray-300"></div> */}
 
-                    {/* TEMPLATE SELECTOR (Visual Mode Only) */}
-                    {viewMode === 'visual' && (
-                        <div className="relative animate-in fade-in duration-300">
+                    {/* TEMPLATE SELECTOR */}
+                    <div className="relative animate-in fade-in duration-300">
                             <button
                                 onClick={() => setTemplateMenuOpen(!templateMenuOpen)}
                                 className="flex items-center gap-2 px-3 py-1.5 bg-gray-100 hover:bg-gray-200 rounded-md text-xs font-semibold text-gray-700 transition-colors"
@@ -507,16 +520,13 @@ export const WorkspaceStudio: React.FC<WorkspaceStudioProps> = ({
                                     </div>
                                 </div>
                             )}
-                        </div>
-                    )}
+                    </div>
 
-                    {viewMode === 'visual' && (
-                        <div className="flex items-center gap-1 bg-gray-100 rounded p-0.5 ml-2">
-                            <button onClick={() => setZoom(z => Math.max(50, z - 10))} className="p-1 hover:bg-white rounded"><Minimize className="w-3 h-3" /></button>
-                            <span className="text-xs w-8 text-center">{zoom}%</span>
-                            <button onClick={() => setZoom(z => Math.min(150, z + 10))} className="p-1 hover:bg-white rounded"><Maximize className="w-3 h-3" /></button>
-                        </div>
-                    )}
+                    <div className="flex items-center gap-1 bg-gray-100 rounded p-0.5 ml-2">
+                        <button onClick={() => setZoom(z => Math.max(50, z - 10))} className="p-1 hover:bg-white rounded"><Minimize className="w-3 h-3" /></button>
+                        <span className="text-xs w-8 text-center">{zoom}%</span>
+                        <button onClick={() => setZoom(z => Math.min(150, z + 10))} className="p-1 hover:bg-white rounded"><Maximize className="w-3 h-3" /></button>
+                    </div>
                 </div>
                 <div className="flex items-center gap-3">
                     <div className="flex items-center gap-1 border-r border-gray-200 pr-3 mr-1">
@@ -538,21 +548,17 @@ export const WorkspaceStudio: React.FC<WorkspaceStudioProps> = ({
                         </button>
                     </div>
 
-                    {viewMode === 'visual' && (
-                        <button onClick={addNewSection} className="flex items-center gap-1 px-3 py-1.5 bg-indigo-50 text-indigo-700 hover:bg-indigo-100 rounded text-xs font-bold transition-colors">
-                            <PlusCircle className="w-3.5 h-3.5" /> Add Section
-                        </button>
-                    )}
+                    <button onClick={addNewSection} className="flex items-center gap-1 px-3 py-1.5 bg-indigo-50 text-indigo-700 hover:bg-indigo-100 rounded text-xs font-bold transition-colors">
+                        <PlusCircle className="w-3.5 h-3.5" /> Add Section
+                    </button>
                     <button onClick={handlePrint} className="flex items-center gap-1 px-3 py-1.5 bg-gray-800 text-white hover:bg-gray-700 rounded text-xs font-bold transition-colors">
                         <Download className="w-3.5 h-3.5" /> Export PDF
                     </button>
                 </div>
             </div>
 
-            {/* CONTENT AREA */}
-            {viewMode === 'visual' ? (
-                /* 1. VISUAL PAPER MODE */
-                <div ref={viewportRef} className="paper-viewport flex-1 relative print:p-0 print:overflow-visible">
+            {/* CONTENT AREA - Visual Paper Mode Only */}
+            <div ref={viewportRef} className="paper-viewport flex-1 relative print:p-0 print:overflow-visible">
                     {/* REFACTORING OVERLAY */}
                     {isRefactoring && (
                         <div className="fixed inset-0 z-50 flex flex-col items-center justify-center bg-gray-900/50 backdrop-blur-sm animate-in fade-in duration-200">
@@ -627,26 +633,29 @@ export const WorkspaceStudio: React.FC<WorkspaceStudioProps> = ({
 
                             {/* 2. COLUMNS BODY */}
                             <div className="paper-columns">
-                                {blocks.filter(b => b.type === 'section').map((block, idx) => (
-                                    <div key={block.id} className="mb-6 break-inside-avoid">
-                                        {/* Section Header */}
-                                        <div className="group flex items-center gap-2 mb-2">
-                                            {editingBlockId === block.id ? (
-                                                <input
-                                                    value={block.heading}
-                                                    onChange={(e) => handleHeadingChange(block.id, e.target.value)}
-                                                    className="font-bold uppercase text-sm border-b border-indigo-500 outline-none w-full"
-                                                    placeholder="SECTION TITLE"
-                                                />
-                                            ) : (
-                                                <h1 className="paper-h1 cursor-pointer hover:text-indigo-600" onClick={() => setEditingBlockId(block.id)}>
-                                                    {idx + 1}. {block.heading}
-                                                </h1>
-                                            )}
-                                            {editingBlockId === block.id && (
-                                                <button onClick={() => deleteBlock(block.id)} className="text-red-400 hover:text-red-600"><Trash2 className="w-3 h-3" /></button>
-                                            )}
-                                        </div>
+                                {(() => {
+                                    const sectionBlocks = blocks.filter(b => b.type === 'section');
+                                    console.log('[WorkspaceStudio] Rendering sections:', sectionBlocks.length, sectionBlocks.map(b => b.heading));
+                                    return sectionBlocks.map((block, idx) => (
+                                        <div key={block.id} className="mb-6 break-inside-avoid">
+                                            {/* Section Header */}
+                                            <div className="group flex items-center gap-2 mb-2">
+                                                {editingBlockId === block.id ? (
+                                                    <input
+                                                        value={block.heading}
+                                                        onChange={(e) => handleHeadingChange(block.id, e.target.value)}
+                                                        className="font-bold uppercase text-sm border-b border-indigo-500 outline-none w-full"
+                                                        placeholder="SECTION TITLE"
+                                                    />
+                                                ) : (
+                                                    <h1 className="paper-h1 cursor-pointer hover:text-indigo-600" onClick={() => setEditingBlockId(block.id)}>
+                                                        {idx + 1}. {block.heading}
+                                                    </h1>
+                                                )}
+                                                {editingBlockId === block.id && (
+                                                    <button onClick={() => deleteBlock(block.id)} className="text-red-400 hover:text-red-600"><Trash2 className="w-3 h-3" /></button>
+                                                )}
+                                            </div>
 
                                         {/* Content */}
                                         <EditableBlock
@@ -658,38 +667,34 @@ export const WorkspaceStudio: React.FC<WorkspaceStudioProps> = ({
                                             activeProject={activeProject}
                                         />
                                     </div>
-                                ))}
+                                    ));
+                                })()}
                             </div>
                         </div>
                     </div>
+            </div>
+            
+            {/* SOURCE CODE MODE - Commented out, only visual mode with sectional editor needed */}
+            {/* <div className="flex-1 flex relative overflow-hidden">
+                <div className="flex-1 border-r border-gray-300 overflow-hidden">
+                    <SimpleTextEditor
+                        content={content}
+                        onChange={onChange}
+                        citationFormat={citationFormat}
+                        onFormatChange={setCitationFormat}
+                        isStreaming={isStreaming}
+                    />
                 </div>
-            ) : (
-                /* 2. SOURCE CODE MODE - Simple Editor + Live Preview */
-                <div className="flex-1 flex relative overflow-hidden">
-                    {/* Left: Text Editor */}
-                    <div className="flex-1 border-r border-gray-300 overflow-hidden">
-                        <SimpleTextEditor
-                            content={content}
-                            onChange={onChange}
-                            citationFormat={citationFormat}
-                            onFormatChange={setCitationFormat}
-                            isStreaming={isStreaming}
-                        />
-                    </div>
-
-                    {/* Right: Live Preview */}
-                    <div className="flex-1 overflow-hidden">
-                        <LivePaperPreview
-                            content={content}
-                            citationFormat={citationFormat}
-                        />
-                    </div>
+                <div className="flex-1 overflow-hidden">
+                    <LivePaperPreview
+                        content={content}
+                        citationFormat={citationFormat}
+                    />
                 </div>
-            )}
+            </div> */}
 
-            {/* FLOATING PAGINATION CONTROLS (Visual Mode Only) */}
-            {viewMode === 'visual' && (
-                <div className="absolute bottom-6 left-1/2 transform -translate-x-1/2 z-40 animate-in slide-in-from-bottom-4 print:hidden">
+            {/* FLOATING PAGINATION CONTROLS */}
+            <div className="absolute bottom-6 left-1/2 transform -translate-x-1/2 z-40 animate-in slide-in-from-bottom-4 print:hidden">
                     <div className="bg-gray-900 text-white rounded-full shadow-2xl px-4 py-2 flex items-center gap-4 text-sm font-medium border border-gray-700/50 backdrop-blur-md">
                         <button
                             onClick={() => scrollToPage(currentPage - 1)}
@@ -725,8 +730,7 @@ export const WorkspaceStudio: React.FC<WorkspaceStudioProps> = ({
                             <ChevronRight className="w-4 h-4" />
                         </button>
                     </div>
-                </div>
-            )}
+            </div>
         </div>
     );
 };

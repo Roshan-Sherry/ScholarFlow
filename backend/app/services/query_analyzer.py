@@ -109,7 +109,10 @@ JSON Output:
             
             try:
                 result = json.loads(json_str)
-                logger.info(f"Query analysis: {result.get('search_query', query)}")
+                logger.info(f"✓ Query analysis successful:")
+                logger.info(f"  Original query: {query}")
+                logger.info(f"  Optimized query: {result.get('search_query', query)}")
+                logger.info(f"  Expanded queries: {result.get('expanded_queries', [])}")
                 return result
             except json.JSONDecodeError:
                 logger.warning(f"Failed to parse query analysis JSON: {response_text[:100]}...")
