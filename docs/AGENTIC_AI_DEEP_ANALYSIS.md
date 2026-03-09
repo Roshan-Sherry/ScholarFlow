@@ -1,1146 +1,611 @@
-# Deep Analysis: Agentic AI & LangGraph Architecture for Non-Linear Research
+# ScholarFlow — Deep Technical Analysis
 
-## Executive Summary
-
-This document provides an in-depth analysis of ScholarFlow's agentic AI system, comparing the previous implementation with the current multi-agent architecture, and proposing improvements to better support non-linear research workflows using LangGraph's full capabilities.
-
-**Key Findings:**
-- ✅ Current system uses LangGraph with 2 cyclic loops
-- ⚠️ Agent interconnections are still somewhat linear
-- 🎯 Research is inherently non-linear and requires more dynamic routing
-- 💡 Recommendations: Add cross-agent communication, dynamic re-planning, and parallel execution paths
+> **ScholarFlow** is an AI-powered academic research assistant that uses a **LangGraph multi-agent system** to help researchers discover papers, synthesize insights, and draft scholarly manuscripts — all through a conversational interface backed by an interactive AI avatar.
 
 ---
 
 ## Table of Contents
 
-1. [Understanding Agentic AI Systems](#1-understanding-agentic-ai-systems)
-2. [LangGraph Architecture Principles](#2-langgraph-architecture-principles)
-3. [Current Implementation Analysis](#3-current-implementation-analysis)
-4. [Visual Comparison: Before vs After](#4-visual-comparison-before-vs-after)
-5. [Non-Linear Research Workflows](#5-non-linear-research-workflows)
-6. [Gap Analysis & Improvements](#6-gap-analysis--improvements)
-7. [Recommended Architecture](#7-recommended-architecture)
-8. [Implementation Roadmap](#8-implementation-roadmap)
+- [1. Project Overview](#1-project-overview)
+- [2. What Can ScholarFlow Do?](#2-what-can-scholarflow-do)
+- [3. Technology Stack](#3-technology-stack)
+- [4. Architecture Overview](#4-architecture-overview)
+- [5. LangGraph Agentic AI System — Full Analysis](#5-langgraph-agentic-ai-system--full-analysis)
+  - [5.1 Shared State (ResearchState)](#51-shared-state-researchstate)
+  - [5.2 The Non-Linear Multi-Agent Graph](#52-the-non-linear-multi-agent-graph)
+  - [5.3 Core Workflow Nodes](#53-core-workflow-nodes)
+  - [5.4 Specialist Agents](#54-specialist-agents)
+  - [5.5 Dynamic Routing System](#55-dynamic-routing-system)
+  - [5.6 Agent Message Bus](#56-agent-message-bus)
+  - [5.7 Performance & Optimization Layer](#57-performance--optimization-layer)
+  - [5.8 Workflow Monitor](#58-workflow-monitor)
+- [6. RAG Grounding System](#6-rag-grounding-system)
+- [7. Vector Store & Embeddings](#7-vector-store--embeddings)
+- [8. Frontend Architecture](#8-frontend-architecture)
+- [9. API Layer](#9-api-layer)
+- [10. Data Model](#10-data-model)
+- [11. Graph Flow Diagrams](#11-graph-flow-diagrams)
 
 ---
 
-## 1. Understanding Agentic AI Systems
+## 1. Project Overview
 
-### 1.1 What is Agentic AI?
+**ScholarFlow** is a full-stack AI research assistant designed for **students, researchers, and academics**. It bridges the gap between discovering relevant research literature and producing well-cited academic manuscripts. The system utilizes **custom-trained Ollama models** (fine-tuned on arXiv papers) as its primary intelligence engine, acting as an **AI co-author**. It can search for papers across ArXiv and Semantic Scholar, analyze and rank them for relevance, synthesize insights, and draft publication-quality academic text with proper citations.
 
-**Agentic AI** refers to AI systems that:
-- **Act autonomously** to achieve goals
-- **Make decisions** without constant human guidance
-- **Self-correct** when encountering errors
-- **Learn and adapt** from feedback
-- **Collaborate** with other agents
-
-### 1.2 Agent Architecture Patterns
-
-#### Linear Chain (Simple)
-```
-Input → Agent1 → Agent2 → Agent3 → Output
-```
-**Pros:** Predictable, easy to debug  
-**Cons:** No error recovery, rigid flow
-
-#### Cyclic Graph (Better)
-```
-       ┌─────────┐
-Input → Agent1 ──→ Agent2 ──→ Output
-         ↑         │
-         └─────────┘
-      (Feedback Loop)
-```
-**Pros:** Self-correction, can retry  
-**Cons:** Still somewhat sequential
-
-#### Multi-Agent Mesh (Best for Research)
-```
-         Agent1 ←→ Agent2
-           ↕         ↕
-Input → Supervisor ←→ Agent3 → Output
-           ↕         ↕
-         Agent4 ←→ Agent5
-```
-**Pros:** Dynamic routing, parallel execution, true collaboration  
-**Cons:** Complex, harder to debug
-
-### 1.3 Why Research Requires Non-Linear Workflows
-
-Research is **iterative** and **exploratory**:
-
-1. **Discovery** → Find gaps → **Search again** (not linear)
-2. **Read papers** → Find citation → **Discover new direction**
-3. **Draft hypothesis** → Data contradicts → **Revise methodology**
-4. **Write introduction** → Realize background missing → **Back to reading**
-
-**Key Insight:** Researchers don't follow A→B→C. They jump between stages based on what they find.
+What makes ScholarFlow unique is its use of **LangGraph** to orchestrate a **non-linear multi-agent workflow** where specialized AI agents (Supervisor, Search, Ranker, Writer, Reviewer, Citation, Synthesis, etc.) collaborate dynamically, routing tasks to each other based on real-time context rather than following a rigid pipeline.
 
 ---
 
-## 2. LangGraph Architecture Principles
+## 2. What Can ScholarFlow Do?
 
-### 2.1 Core Concepts
+| Capability | Description |
+|---|---|
+| **Paper Discovery** | Search ArXiv & Semantic Scholar with AI-optimized queries; auto-refine if results are poor |
+| **Intelligent Ranking** | Batch-score papers for relevance using LLM; iterative refinement loop |
+| **RAG-Grounded Q&A** | Answer research questions grounded in actual papers with inline citations `[1]`, `[2]` |
+| **Academic Drafting** | Generate section-aware manuscripts (Introduction, Methods, Results, Discussion, Conclusion) |
+| **Manuscript Outline** | AI-generated outlines with parallel section drafting |
+| **Draft Review Loop** | Automated reviewer agent critiques drafts; writer revises iteratively |
+| **Citation Management** | IEEE/APA citation formatting, bibliography generation, citation gap detection |
+| **Multi-Paper Synthesis** | Cross-paper comparison, contradiction identification, gap analysis |
+| **Lab Asset Analysis** | Gemini Vision analysis of experimental figures, data, and images |
+| **PDF Processing** | Upload PDFs → chunk with page tracking → index in FAISS vector store |
+| **AI Avatar** | Interactive AI avatar with voice (TTS via Edge-TTS, STT via Faster-Whisper) |
+| **Project Management** | Multiple research projects with file systems, paper libraries, and research assets |
+| **Chat Memory** | Conversation history indexed in vector store for long-term context retrieval |
+| **Real-time Streaming** | Server-Sent Events (SSE) stream agent progress and responses to the UI |
 
-#### State Management
+---
+
+## 3. Technology Stack
+
+### Backend
+
+| Technology | Purpose |
+|---|---|
+| **Python 3.10+** | Core language |
+| **FastAPI** | REST API framework with async support |
+| **LangGraph ≥ 0.2.45** | Multi-agent workflow orchestration (StateGraph with cyclic graphs) |
+| **LangChain ≥ 0.3.0** | LLM abstraction layer (core, community, Google GenAI, Ollama) |
+| **Ollama (Custom Models)** | **Primary LLM Engine**. Uses custom models trained on arXiv papers (`scholarflow-search`, `scholarflow-studio`, `scholarmate`, etc.) for highly specialized academic tasks. |
+| **Google Gemini** | Fallback LLM and Vision Analysis (via `gemini-1.5-flash`) specifically for processing lab assets and visual data. |
+| **FAISS** | Vector similarity search for RAG |
+| **Sentence-Transformers** | Embedding model (`all-MiniLM-L6-v2`, 384-dim) |
+| **SQLAlchemy + Alembic** | ORM and database migrations (SQLite) |
+| **ArXiv API** | Academic paper search |
+| **Semantic Scholar API** | Academic paper search |
+| **PyMuPDF + pdfplumber** | PDF text extraction with page tracking |
+| **Edge-TTS** | Text-to-speech for avatar |
+| **Faster-Whisper** | Speech-to-text for voice input |
+| **Pydantic v2** | Data validation and settings management |
+
+### Frontend
+
+| Technology | Purpose |
+|---|---|
+| **React 19** | UI framework |
+| **TypeScript** | Type-safe JavaScript |
+| **Vite 6** | Build tool and dev server |
+| **Zustand 5** | State management (stores: `appStore`, `projectStore`, `agentStore`, `toastStore`) |
+| **TanStack React Query** | API data fetching and caching |
+| **Monaco Editor** | Code/text editor (Overleaf-like file editing) |
+| **Lucide React** | Icon library |
+| **react-markdown** | Markdown rendering for AI responses |
+| **react-pdf / pdfjs-dist** | PDF viewer |
+| **Anam.ai SDK** | Interactive AI avatar |
+| **Axios** | HTTP client |
+
+---
+
+## 4. Architecture Overview
+
+```
+┌─────────────────────────────────────────────────────────────┐
+│                     FRONTEND (React + Vite)                 │
+│                                                             │
+│  Dashboard → WorkspaceDiscovery → WorkspaceReading          │
+│                    ↕                    ↕                    │
+│              WorkspaceStudio ← AgentPanel + Avatar          │
+│                                                             │
+│  Stores: appStore | projectStore | agentStore | toastStore   │
+│  Hooks:  useStreaming | useProjects | useLabAssets           │
+└──────────────────────────┬──────────────────────────────────┘
+                           │ REST + SSE
+┌──────────────────────────▼──────────────────────────────────┐
+│                 BACKEND (FastAPI + LangGraph)                │
+│                                                             │
+│  API Routes:  /chat  /research  /papers  /projects          │
+│               /lab   /agents    /voice   /avatar            │
+│                                                             │
+│  ┌───────────────────────────────────────────────────────┐  │
+│  │            LANGGRAPH MULTI-AGENT SYSTEM               │  │
+│  │                                                       │  │
+│  │  Supervisor → Memory → Router                         │  │
+│  │       ↓                   ↓                           │  │
+│  │  [Search ↔ Ranker ↔ Coordinator ↔ Refiner]           │  │
+│  │       ↓                                               │  │
+│  │  [Analyzing → RAG Response → Proactive → END]         │  │
+│  │       ↓                                               │  │
+│  │  [Planner → Writer ↔ Reviewer ↔ Citation]            │  │
+│  │       ↓                                               │  │
+│  │  [Synthesis ↔ Proactive → END]                        │  │
+│  │                                                       │  │
+│  │  + Message Bus + Workflow Monitor + Performance Cache  │  │
+│  └───────────────────────────────────────────────────────┘  │
+│                                                             │
+│  Services: VectorStore | RAGGrounding | PaperSearch          │
+│            ArxivClient | SemanticScholar | PDFProcessor      │
+│            QueryAnalyzer | AnswerGenerator | VoiceService    │
+│                                                             │
+│  Core: AIClient (Custom Ollama + Gemini) | Config | Database│
+└─────────────────────────────────────────────────────────────┘
+```
+
+---
+
+## 5. LangGraph Agentic AI System — Full Analysis
+
+The heart of ScholarFlow is a **LangGraph `StateGraph`** that implements a **non-linear, multi-agent research workflow**. Unlike simple sequential chains, this graph supports **cyclic edges, conditional routing, and dynamic agent-to-agent communication**.
+
+### 5.1 Shared State (`ResearchState`)
+
+> **File:** `backend/app/agents/state.py`
+
+All agents operate on a shared `ResearchState` TypedDict that flows through every node. It contains **40+ fields** organized into categories:
+
 ```python
 class ResearchState(TypedDict):
-    # Shared memory across all agents
-    messages: List[BaseMessage]
-    query: str
-    found_papers: List[Dict]
-    # ... 50+ fields
+    # Core conversation
+    messages: Annotated[List[BaseMessage], operator.add]  # Append-only message log
+    query: str                                            # User's research question
+    project_id: str                                       # Active project
+    session_id: Optional[str]                             # Chat session
+
+    # Discovery workflow
+    found_papers: List[Dict]          # Raw search results
+    ranked_papers: List[Dict]         # After relevance scoring
+    selected_paper_ids: List[str]     # User-selected context papers
+    search_iteration: int             # Refinement loop counter
+    refined_query: Optional[str]      # Modified query for retry
+
+    # Drafting workflow
+    current_draft: Dict               # {section, content, status}
+    current_section: Optional[str]    # Active section being drafted
+    critique_feedback: Optional[str]  # From reviewer agent
+    revision_count: int               # Revision loop counter
+    needs_revision: bool              # Conditional edge flag
+
+    # Intent routing
+    intent: Optional[str]             # "SEARCH" | "CHAT" | "DRAFT" | "ANALYZE"
+    operation_mode: Optional[str]     # "research" | "studio"
+
+    # Coordinator intelligence
+    coordinator_decision: Optional[str]   # "proceed" | "refine_query" | "expand_search"
+    coordinator_reasoning: Optional[str]  # Why this decision
+    coordinator_suggestions: Optional[str]
+
+    # Multi-agent extensions
+    active_agent: Optional[str]
+    agent_history: Annotated[List[Dict], operator.add]  # Agent handoff log
+    supervisor_decision: Optional[Dict]
+
+    # Non-linear workflow extensions
+    agent_messages: Annotated[List[Dict], operator.add]  # Inter-agent messages
+    workflow_state: Optional[str]     # "running" | "paused" | "complete" | "stuck"
+    routing_history: Annotated[List[Dict], operator.add]
+    reroute_requested: bool           # Dynamic re-routing flag
+    # ... citations, bibliography, synthesis, memory, quality feedback, etc.
 ```
 
-**Key Feature:** All agents read/write to ONE shared state (no message passing)
-
-#### Nodes = Agents
-```python
-async def search_node(state: ResearchState) -> dict:
-    # Do work
-    return {"found_papers": papers}  # Update state
-```
-
-#### Edges = Control Flow
-```python
-# Conditional edge (decision point)
-graph.add_conditional_edges(
-    "ranker",
-    should_refine_search,
-    {
-        "refine": "search",  # Loop back
-        "continue": "writer"  # Move forward
-    }
-)
-```
-
-### 2.2 LangGraph vs LangChain
-
-| Feature | LangChain | LangGraph |
-|---------|-----------|-----------|
-| **Structure** | Sequential chains | Cyclic graphs |
-| **Flow Control** | Linear | Conditional branching |
-| **Error Recovery** | Minimal | Built-in loops |
-| **State** | Passed through chain | Shared global state |
-| **Parallelism** | Limited | Native support |
-| **Use Case** | Simple Q&A | Complex workflows |
-
-**Why LangGraph for Research:** Research requires backtracking, re-evaluation, and parallel exploration—exactly what graphs enable.
+Key design decisions:
+- **`Annotated[List, operator.add]`** — Fields like `messages`, `logs`, `agent_history` use `operator.add` so each node appends rather than replaces, enabling incremental state accumulation.
+- **`create_initial_state()` factory** — Safely initializes all 40+ fields with sensible defaults.
 
 ---
 
-## 3. Current Implementation Analysis
+### 5.2 The Non-Linear Multi-Agent Graph
 
-### 3.1 Architecture Overview
+> **File:** `backend/app/agents/graph.py`
 
-**Entry Point:** Supervisor → Memory → Router → [Discovery | Drafting | Analysis]
+The graph is constructed in `create_research_graph()` and compiled into a singleton `research_graph`. It contains **18 nodes** and uses **conditional edges** to enable dynamic, non-linear routing.
 
-**Total Nodes:** 14 nodes
-- 5 specialized agents (Supervisor, Memory, Citation, Proactive, Synthesis)
-- 9 workflow nodes (Search, Ranker, Writer, etc.)
+#### Node Inventory
 
-### 3.2 Current Graph Structure (ASCII)
+| Node | Type | Purpose |
+|---|---|---|
+| `supervisor` | Orchestration | Routes requests to appropriate agent, monitors progress |
+| `memory` | Orchestration | Manages conversation history and context retrieval |
+| `monitor` | Orchestration | Detects stuck states, suggests re-routing |
+| `router` | Orchestration | Classifies intent (SEARCH/DRAFT/ANALYZE/CHAT) |
+| `clarifier` | Query | Checks query ambiguity, asks clarifying questions |
+| `search` | Discovery | Searches ArXiv + Semantic Scholar with optimized queries |
+| `ranker` | Discovery | Batch-scores papers for relevance using LLM |
+| `research_coordinator` | Discovery | Intelligent agent evaluating search quality and strategy |
+| `refine_query` | Discovery | Refines search query based on coordinator guidance |
+| `save_to_context` | Discovery | Saves ranked papers to database |
+| `analyzing` | Response | Shows "thinking" status to user (SSE) |
+| `rag_response` | Response | Generates RAG-grounded response with citations |
+| `planner` | Drafting | Generates manuscript outline |
+| `writer` | Drafting | Section-aware academic writing with context blending |
+| `reviewer` | Drafting | Critiques drafts, flags revision needs |
+| `reviewer_approved` | Drafting | Finalizes approved drafts |
+| `citation` | Specialized | Citation management, bibliography, gap detection |
+| `proactive` | Specialized | Suggests next actions, analyzes draft quality |
+| `synthesis` | Specialized | Multi-paper synthesis and comparative analysis |
+| `validator` | Utility | Validates citation accuracy |
+| `build_bibliography` | Utility | Generates formatted bibliography |
 
-```
-                    ┌─────────────┐
-                    │ Supervisor  │ (Orchestrator)
-                    └──────┬──────┘
-                           │
-                    ┌──────▼──────┐
-                    │   Memory    │ (Context Retrieval)
-                    └──────┬──────┘
-                           │
-                    ┌──────▼──────┐
-                    │   Router    │ (Intent Classification)
-                    └──────┬──────┘
-                           │
-        ┌──────────────────┼──────────────────┐
-        │                  │                  │
-        ▼                  ▼                  ▼
-  ┌──────────┐      ┌──────────┐      ┌──────────┐
-  │  SEARCH  │      │  DRAFT   │      │ ANALYZE  │
-  └────┬─────┘      └────┬─────┘      └────┬─────┘
-       │                 │                  │
-       │           ┌─────▼─────┐            │
-       │           │  Planner  │            │
-       │           └─────┬─────┘            │
-       │                 │                  │
-  ┌────▼─────┐           │            ┌─────▼──────┐
-  │  Search  │           │            │ Lab Analyst│
-  └────┬─────┘           │            └─────┬──────┘
-       │                 │                  │
-  ┌────▼─────┐           │                  │
-  │  Ranker  │           │                  │
-  └────┬─────┘           │                  │
-       │                 │                  │
-    ┌──▼──┐              │                  │
-    │ OK? │◄─────────────┼──────────────────┘
-    └──┬──┘              │
-       │ No              │ Yes
-  ┌────▼─────┐      ┌────▼────┐
-  │  Refine  │      │  Writer │
-  └────┬─────┘      └────┬────┘
-       │                 │
-       └─────► (LOOP)    │
-                    ┌────▼────┐
-                    │Citation │
-                    └────┬────┘
-                    ┌────▼────┐
-                    │Reviewer │
-                    └────┬────┘
-                      ┌──▼──┐
-                      │ OK? │
-                      └──┬──┘
-                         │ No
-                    ┌────▼────┐
-                    │  Writer │ (LOOP)
-                    └────┬────┘
-                         │ Yes
-                    ┌────▼────────┐
-                    │  Proactive  │
-                    └────┬────────┘
-                         │
-                       (END)
-```
+#### Conditional Entry Point
 
-### 3.3 Current Loops
+The graph uses `set_conditional_entry_point()` to dynamically choose the starting node based on query analysis — bypassing orchestration overhead for simple requests:
 
-#### Loop 1: Discovery (Search Refinement)
 ```python
-Search → Ranker → should_refine_search()
-                   ├─ "refine_query" → Refine → Search (LOOP)
-                   └─ "save_to_context" → Continue
-```
-**Trigger:** Low relevance scores OR no results  
-**Max Iterations:** 3
-
-#### Loop 2: Drafting (Review)
-```python
-Writer → Reviewer → should_revise_draft()
-                    ├─ "writer" → Writer (LOOP)
-                    └─ "reviewer_approved" → End
-```
-**Trigger:** `needs_revision = True`  
-**Max Iterations:** 2
-
-### 3.4 Strengths
-
-✅ **Cyclic Loops:** System can self-correct (not purely linear)  
-✅ **Shared State:** All agents access same memory  
-✅ **Conditional Routing:** Router classifies intent  
-✅ **Specialized Agents:** Clear separation of concerns  
-✅ **Memory Persistence:** Context maintained across interactions
-
-### 3.5 Limitations
-
-⚠️ **Linear Sub-Workflows:** Within each intent path, flow is still sequential  
-⚠️ **No Cross-Path Jumps:** Can't go from Drafting → Discovery mid-flow  
-⚠️ **Limited Parallelism:** Agents execute serially, not concurrently  
-⚠️ **Fixed Entry Point:** Always Supervisor → Memory → Router  
-⚠️ **No Dynamic Re-Planning:** Can't change intent mid-execution  
-⚠️ **Isolated Agents:** Specialists don't communicate with each other directly
-
----
-
-## 4. Visual Comparison: Before vs After
-
-### 4.1 BEFORE: Pre-Multi-Agent System
-
-```
-┌─────────────────────────────────────────────────────┐
-│              SIMPLE CHAIN APPROACH                  │
-└─────────────────────────────────────────────────────┘
-
-    User Input
-        │
-        ▼
-    ┌──────────┐
-    │  Router  │ (Intent only)
-    └────┬─────┘
-         │
-    ┌────▼─────┐      ┌─────────┐      ┌─────────┐
-    │  Search  │─────►│  Ranker │─────►│  Writer │
-    └──────────┘      └─────────┘      └─────────┘
-                                              │
-                                              ▼
-                                         Response
-
-CHARACTERISTICS:
-- Linear flow
-- No specialized agents
-- No memory
-- No proactive suggestions
-- No synthesis
-- Limited error handling
-```
-
-### 4.2 AFTER: Current Multi-Agent System
-
-```
-┌──────────────────────────────────────────────────────────┐
-│           MULTI-AGENT WITH SUPERVISOR                     │
-└──────────────────────────────────────────────────────────┘
-
-                     User Input
-                          │
-                          ▼
-                  ┌───────────────┐
-                  │  SUPERVISOR   │ (Orchestrator)
-                  │  • Routes     │
-                  │  • Monitors   │
-                  └───────┬───────┘
-                          │
-                          ▼
-                  ┌───────────────┐
-                  │    MEMORY     │ (Context)
-                  │  • History    │
-                  │  • Insights   │
-                  └───────┬───────┘
-                          │
-                          ▼
-                  ┌───────────────┐
-                  │    ROUTER     │ (Intent)
-                  └───────┬───────┘
-                          │
-        ┌─────────────────┼─────────────────┐
-        ▼                 ▼                 ▼
-   ┌─────────┐       ┌─────────┐      ┌──────────┐
-   │ SEARCH  │       │  DRAFT  │      │ ANALYZE  │
-   │ Path    │       │  Path   │      │  Path    │
-   └────┬────┘       └────┬────┘      └────┬─────┘
-        │                 │                 │
-        ▼                 ▼                 ▼
-   ┌─────────┐       ┌─────────┐      ┌──────────┐
-   │Synthesis│       │Citation │      │ Citation │
-   └────┬────┘       └────┬────┘      └────┬─────┘
-        │                 │                 │
-        └─────────────────┼─────────────────┘
-                          ▼
-                  ┌───────────────┐
-                  │  PROACTIVE    │ (Suggestions)
-                  │  • Next steps │
-                  │  • Quality    │
-                  └───────┬───────┘
-                          │
-                          ▼
-                      Response
-
-IMPROVEMENTS:
-✅ Supervisor coordination
-✅ Memory persistence
-✅ Specialized agents (5)
-✅ Citation management
-✅ Proactive suggestions
-✅ Multi-paper synthesis
-
-REMAINING GAPS:
-⚠️ Still linear within paths
-⚠️ No cross-path transitions
-⚠️ Limited parallelism
-```
-
-### 4.3 PROPOSED: Fully Non-Linear Research Graph
-
-```
-┌──────────────────────────────────────────────────────────────┐
-│         NON-LINEAR MULTI-AGENT RESEARCH MESH                 │
-└──────────────────────────────────────────────────────────────┘
-
-                        User Input
-                             │
-                             ▼
-                     ┌───────────────┐
-                     │  SUPERVISOR   │
-                     │  (Dynamic)    │
-                     └───────┬───────┘
-                             │
-                ┌────────────┼────────────┐
-                │            │            │
-                ▼            ▼            ▼
-        ┌───────────┐ ┌───────────┐ ┌───────────┐
-        │  MEMORY   │ │  PLANNER  │ │  MONITOR  │
-        │           │◄┤           ├─►│           │
-        └─────┬─────┘ └─────┬─────┘ └─────┬─────┘
-              │             │             │
-              └──────┬──────┴──────┬──────┘
-                     │             │
-      ┌──────────────┼─────────────┼──────────────┐
-      │              │             │              │
-      ▼              ▼             ▼              ▼
-┌──────────┐   ┌──────────┐  ┌──────────┐  ┌──────────┐
-│ SEARCH   │◄─►│  WRITER  │◄►│ CITATION │◄►│SYNTHESIS │
-│ Agent    │   │  Agent   │  │  Agent   │  │  Agent   │
-└────┬─────┘   └────┬─────┘  └────┬─────┘  └────┬─────┘
-     │              │             │              │
-     │         ┌────┼─────────────┼────┐         │
-     │         │    │             │    │         │
-     ▼         ▼    ▼             ▼    ▼         ▼
-┌──────────┐   ┌──────────┐  ┌──────────┐  ┌──────────┐
-│ RANKER   │◄─►│ REVIEWER │◄►│PROACTIVE │◄►│VALIDATOR │
-│ Agent    │   │  Agent   │  │  Agent   │  │  Agent   │
-└────┬─────┘   └────┬─────┘  └────┬─────┘  └────┬─────┘
-     │              │             │              │
-     └──────────────┴─────────────┴──────────────┘
-                    │
-                    ▼
-            ┌───────────────┐
-            │  CONSOLIDATOR │
-            └───────┬───────┘
-                    │
-                    ▼
-                Response
-
-KEY FEATURES:
-✅ Bidirectional communication (◄►)
-✅ Any agent can call any other agent
-✅ Dynamic re-routing based on findings
-✅ Parallel execution where possible
-✅ Real-time monitoring and adaptation
-✅ No fixed paths—true non-linear flow
-
-EXAMPLE SCENARIOS:
-1. Writer needs citation → Directly calls Citation Agent
-2. Synthesis finds gap → Triggers Search Agent
-3. Reviewer detects methodology issue → Calls Planner
-4. Search finds contradictory paper → Alerts Writer mid-draft
+# Direct entry for simple tasks (skip supervisor/memory/router)
+"search for papers" → Entry: search
+"write a draft"     → Entry: writer
+"cite this paper"   → Entry: citation
+"compare papers"    → Entry: synthesis
+default             → Entry: supervisor (full orchestration)
 ```
 
 ---
 
-## 5. Non-Linear Research Workflows
+### 5.3 Core Workflow Nodes
 
-### 5.1 Real Researcher Behavior Patterns
+> **File:** `backend/app/agents/nodes.py` (1,233 lines)
 
-#### Pattern 1: Iterative Discovery
+#### Router Node
+Uses **fast keyword-based classification** (no LLM call) to determine intent:
+- `"draft"`, `"write"` → `DRAFT`
+- `"analyze"` + `"image"/"data"` → `ANALYZE`
+- Everything else → `SEARCH` (default for research queries)
+
+#### Search Node
+1. Analyzes the query via `QueryAnalyzer` service (generates optimized search terms)
+2. Searches all sources via `search_all_sources()` (ArXiv + Semantic Scholar)
+3. If < 3 results, tries expanded queries from the analyzer
+4. Deduplicates and limits to 10 papers
+5. **Auto-saves** discovered papers to the project library
+
+#### Ranker Node (Optimized)
+Uses **batch scoring** — sends all papers to the LLM in a single prompt:
 ```
-Start Research
-   ↓
-Search "machine learning"
-   ↓
-Find paper on transformers
-   ↓
-Realize need to understand attention first
-   ↓
-NEW SEARCH "attention mechanism" ← (Non-linear!)
-   ↓
-Find foundational paper
-   ↓
-Go BACK to transformers paper
+Rate the relevance of these N papers to the query (0.0 to 1.0).
+Return ONLY comma-separated scores: "0.85, 0.72, 0.91, ..."
 ```
+This is **10× faster** than scoring papers individually. Falls back to individual scoring if batch parsing fails.
 
-#### Pattern 2: Draft-Driven Discovery
-```
-Start Writing Introduction
-   ↓
-"Transformers were introduced in 2017..."
-   ↓
-Realize: Need citation!
-   ↓
-PAUSE WRITING → Search for original paper ← (Non-linear!)
-   ↓
-Found it!
-   ↓
-RESUME WRITING with [1]
-```
+#### Research Coordinator Node
+An **intelligent agent** that evaluates search results and decides strategy:
+- `"proceed"` → Results are good, move to analysis
+- `"refine_query"` → Query is too broad/narrow
+- `"expand_search"` → Need more papers
+- `"try_different_approach"` → Current strategy isn't working
 
-#### Pattern 3: Contradiction-Driven Revision
-```
-Draft Methodology
-   ↓
-"We use method X because..."
-   ↓
-READ NEW PAPER (during writing)
-   ↓
-Paper Y contradicts method X!
-   ↓
-BACKTRACK → Re-evaluate methodology ← (Non-linear!)
-   ↓
-Revise entire section
-```
+Provides **reasoning** for all decisions (transparent decision-making).
 
-### 5.2 Current System vs Ideal
+#### Writer Node (Section-Aware)
+Supports two modes:
+1. **Parallel Manuscript Drafting** — When an outline exists, generates all sections in parallel via `ai_client.generate_batch()`
+2. **Single Section Drafting** — Context-aware generation with:
+   - **Literature context** from FAISS vector store (selected papers)
+   - **Research context** from student's own research assets
+   - **Section-aware weighting** (e.g., Introduction = 80% literature / 20% research; Results = 80% research / 20% literature)
 
-| Research Action | Current System | Ideal System |
-|----------------|----------------|--------------|
-| **Mid-draft search** | Cannot—must finish draft first | Pause draft, search, resume |
-| **Cite while writing** | Must wait for citation phase | Real-time citation injection |
-| **Change direction** | Restart workflow | Dynamic re-routing |
-| **Parallel reading** | Serial processing | Read multiple papers simultaneously |
-| **Cross-reference** | Not supported | Agent-to-agent calls |
+#### Reviewer Node
+Critiques drafts and sets `needs_revision` flag, triggering the **Review Loop** (writer ↔ reviewer cycle, max 2 iterations).
 
-### 5.3 Non-Linear Capabilities Needed
-
-1. **Dynamic Re-Entry**
-   - Enter graph at any node, not just entry point
-   - Example: "Add citation to section 3" → Go directly to Citation Agent
-
-2. **Agent-to-Agent Communication**
-   - Writer calls Citation Agent directly (no supervisor)
-   - Search Agent notifies Writer of new relevant paper
-
-3. **Parallel Execution**
-   - Search 3 different topics simultaneously
-   - Rank papers while continuing to search
-
-4. **State Branching**
-   - Fork state for "what-if" exploration
-   - Try two draft approaches in parallel
-
-5. **Interrupt & Resume**
-   - Pause drafting to investigate finding
-   - Resume exactly where left off
+#### RAG Response Node
+Calls `generate_grounded_response()` which:
+1. Formats papers into context with citation mapping `[1]`, `[2]`
+2. Generates **dual output**: conversational narration (for avatar) + formal content (for display)
+3. Appends reference list
+4. Extracts which papers were actually cited
 
 ---
 
-## 6. Gap Analysis & Improvements
+### 5.4 Specialist Agents
 
-### 6.1 Current Gaps
+> **File:** `backend/app/agents/specialists.py`
 
-#### Gap 1: Linear Sub-Workflows
-**Problem:** Once in Discovery path, can't switch to Drafting  
-**Impact:** Rigid, doesn't match research behavior  
-**Solution:** Add inter-path edges
+Six specialized agent classes, managed as singletons:
 
-#### Gap 2: No Parallelism
-**Problem:** Search → Rank → Write (one at a time)  
-**Impact:** Slow, inefficient  
-**Solution:** Parallel node execution
+| Agent | Class | Responsibility |
+|---|---|---|
+| **SupervisorAgent** | Coordinates workflow, decides which agent handles a task, monitors progress |
+| **MemoryAgent** | Conversation history, context retrieval, history compression |
+| **CitationAgent** | Citation generation (IEEE/APA), bibliography, citation gap detection |
+| **ResearchCoordinatorAgent** | Search strategy, query refinement, coverage assessment |
+| **ProactiveAgent** | Suggests next actions, analyzes draft quality |
+| **SynthesisAgent** | Multi-paper synthesis, comparative analysis, contradiction detection |
 
-#### Gap 3: Fixed Entry Point
-**Problem:** Always Supervisor → Memory → Router  
-**Impact:** Can't directly invoke agents  
-**Solution:** Multiple entry points
+#### CitationAgent
+- Supports **IEEE** and **APA** citation styles
+- Maintains a `citation_map` (paper_id → citation_number)
+- Subscribes to `CITATION_NEEDED` messages via the message bus
+- Can generate full bibliography and suggest where citations are missing
 
-#### Gap 4: No Agent Collaboration
-**Problem:** Agents don't communicate  
-**Impact:** Missed opportunities for synergy  
-**Solution:** Shared agent communication channel
-
-#### Gap 5: No Dynamic Re-Planning
-**Problem:** Intent classified once at start  
-**Impact:** Can't adapt to discoveries  
-**Solution:** Continuous monitoring & re-routing
-
-### 6.2 Improvement Priority Matrix
-
-```
-High Impact │ ■ Inter-path edges    ■ Parallel execution
-           │
-           │ ■ Agent communication  □ Dynamic re-planning
-           │
-Low Impact │ □ Multiple entry       □ State branching
-           └──────────────────────────────────────
-             Easy                    Hard
-             Implementation Complexity
-```
-
-**Legend:**
-- ■ High priority (do first)
-- □ Lower priority (nice to have)
-
-### 6.3 Recommended Improvements
-
-#### Improvement 1: Add Inter-Path Conditional Edges
-
-**What:** Allow transitions between Discovery, Drafting, and Analysis paths
-
-**How:**
-```python
-# NEW: Mid-draft search trigger
-def needs_more_context(state: ResearchState) -> str:
-    draft = state.get("current_draft", {})
-    if "[?]" in draft.get("content", ""):  # Placeholder for missing info
-        return "search"  # Jump to search mid-draft
-    return "continue"
-
-graph.add_conditional_edges(
-    "writer",
-    needs_more_context,
-    {
-        "search": "search",  # Non-linear jump!
-        "continue": "citation"
-    }
-)
-```
-
-**Impact:** ✅ Enables draft-driven discovery
+#### ResearchCoordinatorAgent
+Acts as an **intelligent co-author** guiding the research process:
+- Evaluates search quality metrics (total papers, relevant papers, avg score)
+- Decides whether to proceed, refine query, expand search, or try different approach
+- Provides human-readable reasoning for all decisions
+- Publishes decisions to the message bus
 
 ---
 
-#### Improvement 2: Enable Parallel Node Execution
+### 5.5 Dynamic Routing System
 
-**What:** Run independent agents concurrently
+> **File:** `backend/app/agents/routing.py`
 
-**How:**
-```python
-# NEW: Parallel synthesis and citation
-from langgraph.graph import ParallelNode
+The routing system enables **non-linear, context-aware transitions** between agents. Each routing function examines the current state and decides the next agent:
 
-parallel_analyzer = ParallelNode([
-    synthesis_node,
-    citation_node,
-    proactive_node
-])
-
-graph.add_node("parallel_analysis", parallel_analyzer)
-graph.add_edge("save_to_context", "parallel_analysis")
+```
+route_from_writer:    → citation | search | synthesis | reviewer | writer
+route_from_search:    → ranker | synthesis | writer
+route_from_synthesis: → search | writer | citation | proactive
+route_from_citation:  → writer | validator | bibliography
+route_from_reviewer:  → writer | planner | citation | proactive
+route_from_planner:   → writer | search | synthesis
+route_from_proactive: → search | synthesis | writer | END
+route_from_ranker:    → refine_query | save_to_context | synthesis | rag_response
 ```
 
-**Impact:** ✅ 3x faster for multi-paper analysis
+**Key routing intelligence:**
+- **Writer** detects content markers (`[CITE]`, `TODO:`, `[SYNTHESIZE]`) to dynamically hand off to other agents
+- **Synthesis** detects contradictions/gaps in papers and triggers new searches
+- **Reviewer** distinguishes structural issues (→ planner) from content issues (→ writer) from citation issues (→ citation)
+- **Proactive** only takes action on high-priority suggestions; otherwise ends the workflow
 
 ---
 
-#### Improvement 3: Add Agent Communication Bus
+### 5.6 Agent Message Bus
 
-**What:** Shared message queue for agent-to-agent calls
+> **File:** `backend/app/agents/message_bus.py`
 
-**How:**
+A **publish-subscribe message bus** enabling direct agent-to-agent communication outside the graph edges:
+
 ```python
-# NEW: Agent message bus
 class AgentMessageBus:
-    def __init__(self):
-        self.messages = []
-    
-    def send(self, from_agent: str, to_agent: str, message: dict):
-        self.messages.append({
-            "from": from_agent,
-            "to": to_agent,
-            "payload": message,
-            "timestamp": datetime.now()
-        })
-    
-    def get_messages(self, for_agent: str):
-        return [m for m in self.messages if m["to"] == for_agent]
-
-# In ResearchState
-class ResearchState(TypedDict):
-    ...
-    agent_messages: List[Dict]  # NEW
-
-# Writer can now call Citation directly
-async def writer_node(state):
-    ...
-    if needs_citation:
-        # Direct call to citation agent
-        citation = await get_citation_agent().generate_citation(paper)
+    publish(from_agent, topic, payload, to_agent?, priority?)
+    subscribe(topic, callback)
+    send_to_agent(from_agent, to_agent, topic, payload) → response
+    get_messages(for_agent?, topic?, since?, unprocessed_only?)
 ```
 
-**Impact:** ✅ True agent collaboration
+**Standard Message Topics:**
+
+| Category | Topics |
+|---|---|
+| Search | `new_paper_found`, `search_completed`, `search_failed` |
+| Citation | `citation_needed`, `citation_generated`, `citation_suggestion` |
+| Writing | `draft_started`, `draft_updated`, `draft_completed`, `knowledge_gap` |
+| Synthesis | `synthesis_completed`, `contradiction_found`, `gap_identified` |
+| Review | `review_completed`, `revision_needed`, `quality_issue` |
+| Workflow | `workflow_paused`, `workflow_resumed`, `agent_stuck`, `reroute_needed` |
+
+Features **priority levels** (LOW, MEDIUM, HIGH, URGENT) and **async-safe locking**.
 
 ---
 
-#### Improvement 4: Implement Dynamic Supervisor
+### 5.7 Performance & Optimization Layer
 
-**What:** Supervisor continuously monitors and re-routes
+> **File:** `backend/app/agents/performance.py`
 
-**How:**
-```python
-async def dynamic_supervisor_node(state: ResearchState) -> dict:
-    supervisor = get_supervisor_agent()
-    
-    # Continuous monitoring
-    while not workflow_complete(state):
-        # Check if current path is optimal
-        current_agent = state.get("active_agent")
-        progress = await supervisor.monitor_progress(state)
-        
-        if progress["status"] == "stuck":
-            # Re-route dynamically
-            new_route = await supervisor.route_request(state)
-            return {
-                "active_agent": new_route["primary_agent"],
-                "re_route": True
-            }
-        
-        await asyncio.sleep(1)  # Monitor every second
-    
-    return {"workflow_complete": True}
-```
-
-**Impact:** ✅ Adaptive workflows
+| Optimization | How It Works |
+|---|---|
+| **Response Cache** | LRU cache for synthesis results, routing decisions |
+| **Fast Path** | Simple queries (cite, search, show) skip orchestration entirely |
+| **Batch Scoring** | All papers ranked in one LLM call instead of N calls |
+| **Parallel Execution** | `asyncio.gather()` for independent agent tasks |
+| **Pre-computed Paths** | Direct agent-to-agent paths cached (e.g., writer→citation) |
+| **Performance Tracker** | Monitors agent execution times, flags slow agents (>5s) |
+| **Streaming** | Token-by-token response streaming via SSE |
 
 ---
 
-#### Improvement 5: Add Conditional Entry Points
+### 5.8 Workflow Monitor
 
-**What:** Allow graph entry at any node based on task
+> **File:** `backend/app/agents/workflow_monitor.py`
 
-**How:**
-```python
-def create_adaptive_graph():
-    graph = StateGraph(ResearchState)
-    
-    # Multiple entry points
-    graph.add_conditional_entry(
-        lambda state: determine_entry_node(state),
-        {
-            "search": "search",      # Direct to search
-            "cite": "citation",      # Direct to citation
-            "draft": "writer",       # Direct to writer
-            "analyze": "synthesis"   # Direct to synthesis
-        }
-    )
-    
-    # Rest of graph...
-```
-
-**Impact:** ✅ Efficient targeted operations
+Detects and recovers from stuck workflows:
+- **Stuck detection**: No checkpoint for 30+ seconds, OR same agent ran 5+ consecutive times
+- **Reroute suggestions**: Context-aware alternative agents (e.g., stuck writer → search for new insights)
+- **Performance analysis**: Tracks agent durations, identifies bottlenecks (>10s average)
+- **Progress summary**: Human-readable workflow path visualization
 
 ---
 
-## 7. Recommended Architecture
+## 6. RAG Grounding System
 
-### 7.1 Proposed Graph Structure
+> **File:** `backend/app/services/rag_grounding.py`
 
-```python
-# NEW: Non-Linear Research Graph
-def create_nonlinear_research_graph():
-    graph = StateGraph(ResearchState)
-    
-    # ===== CORE NODES =====
-    graph.add_node("supervisor", dynamic_supervisor_node)
-    graph.add_node("memory", memory_node)
-    graph.add_node("planner", planner_node)
-    graph.add_node("monitor", workflow_monitor_node)  # NEW
-    
-    # ===== WORKER AGENTS (Can call each other) =====
-    graph.add_node("search", search_node)
-    graph.add_node("ranker", ranker_node)
-    graph.add_node("writer", writer_node)
-    graph.add_node("reviewer", reviewer_node)
-    graph.add_node("citation", citation_node)
-    graph.add_node("synthesis", synthesis_node)
-    graph.add_node("proactive", proactive_node)
-    graph.add_node("validator", validator_node)  # NEW
-    
-    # ===== CONDITIONAL ENTRY =====
-    graph.set_conditional_entry_point(determine_entry_node)
-    
-    # ===== INTER-AGENT EDGES (Bidirectional) =====
-    
-    # Search ←→ Synthesis (find related papers)
-    graph.add_conditional_edges("search", route_from_search, 
-        {"synthesis": "synthesis", "ranker": "ranker"})
-    graph.add_conditional_edges("synthesis", route_from_synthesis,
-        {"search": "search", "writer": "writer"})
-    
-    # Writer ←→ Citation (cite while writing)
-    graph.add_conditional_edges("writer", route_from_writer,
-        {"citation": "citation", "search": "search", "reviewer": "reviewer"})
-    graph.add_conditional_edges("citation", route_from_citation,
-        {"writer": "writer", "validator": "validator"})
-    
-    # Reviewer ←→ Planner (restructure if needed)
-    graph.add_conditional_edges("reviewer", route_from_reviewer,
-        {"planner": "planner", "writer": "writer", "proactive": "proactive"})
-    graph.add_conditional_edges("planner", route_from_planner,
-        {"writer": "writer", "search": "search"})
-    
-    # ===== PARALLEL EXECUTION =====
-    parallel_analysis = ParallelNode([
-        synthesis_node,
-        citation_node,
-        validator_node
-    ])
-    graph.add_node("parallel_analysis", parallel_analysis)
-    
-    # ===== CONTINUOUS MONITORING =====
-    graph.add_edge("supervisor", "monitor")
-    graph.add_conditional_edges("monitor", check_workflow_status,
-        {"continue": "active_agent", "complete": END})
-    
-    return graph.compile()
+All research responses are **grounded in actual found papers** to prevent hallucination:
+
+1. **Context Formatting**: Papers are formatted with numbered citations `[1]`, `[2]`... including title, authors, year, and abstract/content
+2. **Dual Output Prompt**: The LLM generates two outputs:
+   - **NARRATION** — Conversational explanation (for the AI avatar to speak)
+   - **CONTENT** — Formal academic synthesis (for display in the UI)
+3. **Citation Tracking**: Extracts which `[N]` citations were actually used in the response
+4. **Chain-of-Thought**: Optional `<thinking>` tag parsing for transparent reasoning
+5. **Reference List**: Auto-appended formatted reference list with page numbers and URLs
+6. **Streaming**: `stream_grounded_response()` yields token-by-token for real-time display
+
+---
+
+## 7. Vector Store & Embeddings
+
+> **File:** `backend/app/services/vector_store.py`
+
+| Feature | Implementation |
+|---|---|
+| **Engine** | FAISS (`IndexFlatL2`) — exact L2 distance search |
+| **Embeddings** | `all-MiniLM-L6-v2` (384 dimensions) via Sentence-Transformers |
+| **Indexing** | Per-project indexes stored as `.index` + `_metadata.npy` files |
+| **Page Tracking** | `add_document_chunks_with_pages()` stores page numbers for PDF-to-page linking |
+| **Chat Memory** | `add_chat_interaction()` indexes Q&A pairs for long-term context |
+| **Filtering** | Search results filterable by paper IDs and content type (paper vs. chat) |
+
+---
+
+## 8. Frontend Architecture
+
+### Core Components
+
+| Component | Purpose |
+|---|---|
+| `App.tsx` | Root component with workspace management, mode switching, panel layout |
+| `Dashboard.tsx` | Project listing, creation, and management |
+| `WorkspaceDiscovery.tsx` | Chat-based paper discovery with SSE streaming |
+| `WorkspaceReading.tsx` | PDF viewer with annotation |
+| `WorkspaceStudio.tsx` | Overleaf-like editor with file tree, outline, drafting |
+| `SidebarLeft.tsx` | Navigation, paper library, file tree |
+| `SidebarRight.tsx` | Agent panel, chat, settings |
+| `AgentPanel.tsx` | Agent activity log, streaming responses |
+| `AgentAvatar.tsx` | Animated AI avatar with Anam.ai integration |
+
+### State Management (Zustand)
+
+| Store | Manages |
+|---|---|
+| `appStore` | View state, active mode, sidebar visibility |
+| `projectStore` | Active project data, files, papers, outline, word count |
+| `agentStore` | Agent state (IDLE/LISTENING/THINKING/SPEAKING), logs |
+| `toastStore` | Notification toasts |
+
+### View Modes
+
+```
+DASHBOARD → DISCOVERY (Paper Search + Chat)
+                ↓
+          READING (PDF Viewer)
+                ↓
+          STUDIO (Academic Writing)
 ```
 
-### 7.2 Enhanced Routing Logic
+Research mode and Studio mode provide different contexts:
+- **Research mode** → Focus on discovering and understanding existing literature
+- **Studio mode** → Focus on original academic writing with AI co-author
 
-```python
-def route_from_writer(state: ResearchState) -> str:
-    """Dynamic routing from writer based on needs"""
-    draft = state.get("current_draft", {})
-    content = draft.get("content", "")
-    
-    # Check for citation placeholders
-    if "[?]" in content or "citation needed" in content.lower():
-        return "citation"
-    
-    # Check for knowledge gaps
-    if "TODO:" in content or "RESEARCH:" in content:
-        return "search"
-    
-    # Check if draft complete
-    if draft.get("status") == "complete":
-        return "reviewer"
-    
-    # Default: continue writing
-    return "writer"
+---
 
+## 9. API Layer
 
-def route_from_synthesis(state: ResearchState) -> str:
-    """Route from synthesis based on findings"""
-    synthesis = state.get("synthesis_summary", "")
-    
-    # If contradictions found, trigger search
-    if "contradiction" in synthesis.lower():
-        return "search"
-    
-    # If gaps identified, trigger search
-    if "gap" in synthesis.lower():
-        return "search"
-    
-    # Otherwise, proceed to writing
-    return "writer"
+> **Files:** `backend/app/api/*.py`
 
+| Router | Base Path | Endpoints |
+|---|---|---|
+| `chat.py` | `/api/v1/` | Chat with SSE streaming, session management |
+| `research.py` | `/api/v1/` | Full LangGraph workflow invocation |
+| `papers.py` | `/api/v1/` | Paper search, library management, PDF upload/download |
+| `projects.py` | `/api/v1/` | Project CRUD, file management, research assets |
+| `lab.py` | `/api/v1/` | Lab asset upload and AI analysis |
+| `agents.py` | `/api/v1/` | Direct agent invocation endpoints |
+| `voice.py` | `/` | Voice input (STT) and output (TTS) |
+| `avatar.py` | `/api/v1/` | Anam.ai avatar session management |
 
-def route_from_citation(state: ResearchState) -> str:
-    """Route from citation back to writer or validator"""
-    citations = state.get("citations_used", {})
-    suggestions = state.get("citation_suggestions", [])
-    
-    # If high-priority suggestions, validate first
-    high_priority = [s for s in suggestions if s.get("priority") == "high"]
-    if high_priority:
-        return "validator"
-    
-    # Otherwise, back to writer
-    return "writer"
+---
+
+## 10. Data Model
+
+> **Files:** `backend/app/models/database.py`, `backend/app/models/schemas.py`
+
+| Entity | Key Fields |
+|---|---|
+| **Project** | id, title, description, type (LIT_REVIEW / EXPERIMENTAL / MANUSCRIPT) |
+| **LibraryItem** | project_id, title, authors, year, abstract, arxiv_id, url, relevance_score, is_selected_for_context |
+| **LabAsset** | project_id, name, asset_type, file_path, ai_description |
+| **ResearchAsset** | project_id, name, asset_type, description, methodology_note, ai_analysis |
+| **ProjectFile** | project_id, name, type (file/folder), content, parentId, extension |
+| **ChatSession** | project_id, title, updated_at, message_count |
+
+---
+
+## 11. Graph Flow Diagrams
+
+### Discovery Flow (Paper Search)
+
+```mermaid
+graph TD
+    A[User Query] --> B{Entry Point}
+    B -->|"search for..."| C[Search Node]
+    B -->|default| D[Supervisor]
+    D --> E[Memory]
+    E --> F[Router]
+    F -->|SEARCH| C
+
+    C --> G[Ranker]
+    G --> H[Research Coordinator]
+
+    H -->|proceed| I[Analyzing]
+    H -->|refine_query| J[Refine Query]
+    H -->|expand_search| I
+
+    J --> C
+
+    I --> K[RAG Response]
+    K --> L[Proactive]
+    L --> M[END]
 ```
 
-### 7.3 Message Bus Implementation
+### Drafting Flow (Academic Writing)
 
-```python
-# NEW: Agent message bus for direct communication
-class AgentMessageBus:
-    """Enables direct agent-to-agent communication"""
-    
-    def __init__(self):
-        self.messages: List[Dict] = []
-        self.subscriptions: Dict[str, List[Callable]] = {}
-    
-    def publish(self, topic: str, message: dict):
-        """Publish message to topic"""
-        self.messages.append({
-            "topic": topic,
-            "message": message,
-            "timestamp": datetime.now()
-        })
-        
-        # Notify subscribers
-        if topic in self.subscriptions:
-            for callback in self.subscriptions[topic]:
-                callback(message)
-    
-    def subscribe(self, topic: str, callback: Callable):
-        """Subscribe to messages on topic"""
-        if topic not in self.subscriptions:
-            self.subscriptions[topic] = []
-        self.subscriptions[topic].append(callback)
-    
-    def get_messages(self, topic: str, since: datetime = None):
-        """Retrieve messages for topic"""
-        msgs = [m for m in self.messages if m["topic"] == topic]
-        if since:
-            msgs = [m for m in msgs if m["timestamp"] > since]
-        return msgs
+```mermaid
+graph TD
+    A[User: "Draft introduction"] --> B{Entry Point}
+    B -->|"write/draft"| C[Writer]
+    B -->|default| D[Supervisor → Memory → Router]
+    D -->|DRAFT| E[Planner]
 
+    E --> C
 
-# Usage in agents
-class EnhancedWriterAgent:
-    def __init__(self, message_bus: AgentMessageBus):
-        self.bus = message_bus
-        
-        # Subscribe to relevant topics
-        self.bus.subscribe("new_paper_found", self.on_new_paper)
-        self.bus.subscribe("citation_needed", self.on_citation_needed)
-    
-    async def on_new_paper(self, message: dict):
-        """Handle new paper discovered during writing"""
-        paper = message["paper"]
-        # Pause current writing
-        # Integrate new finding
-        # Resume writing
-    
-    async def write_draft(self, state: ResearchState):
-        # While writing...
-        if needs_citation:
-            # Publish request
-            self.bus.publish("request_citation", {
-                "text": "Transformers improved NLP",
-                "context": "introduction"
-            })
+    C -->|"draft complete"| F[Reviewer]
+    C -->|"[CITE] marker"| G[Citation]
+    C -->|"TODO: marker"| H[Search]
+    C -->|"[SYNTHESIZE]"| I[Synthesis]
+
+    G --> C
+    H --> J[Ranker] --> C
+    I --> C
+
+    F -->|needs revision| C
+    F -->|"structural issues"| E
+    F -->|"citation issues"| G
+    F -->|approved| K[Proactive]
+    K --> L[END]
 ```
 
-### 7.4 Parallel Execution Pattern
+### Non-Linear Agent Communication
 
-```python
-from langgraph.pregel import Channel
-from langgraph.graph import ParallelExecutor
+```mermaid
+graph LR
+    subgraph "Message Bus"
+        MB[AgentMessageBus]
+    end
 
-async def parallel_paper_analysis(state: ResearchState) -> dict:
-    """Analyze papers in parallel"""
-    papers = state.get("ranked_papers", [])
-    
-    # Create parallel tasks
-    tasks = []
-    for paper in papers[:5]:  # Top 5
-        tasks.append(analyze_single_paper(paper))
-    
-    # Execute in parallel
-    results = await asyncio.gather(*tasks)
-    
-    return {
-        "paper_analyses": results,
-        "logs": [{
-            "step": "parallel_analysis",
-            "message": f"Analyzed {len(results)} papers concurrently"
-        }]
-    }
-
-async def analyze_single_paper(paper: dict) -> dict:
-    """Analyze one paper (runs in parallel)"""
-    return {
-        "paper_id": paper["id"],
-        "key_findings": await extract_findings(paper),
-        "methodology": await extract_methodology(paper),
-        "citations": await extract_citations(paper)
-    }
+    Supervisor -->|route| MB
+    Writer -->|citation_needed| MB
+    MB -->|citation_generated| Writer
+    Search -->|search_completed| MB
+    Coordinator -->|agent_decision| MB
+    Monitor -->|reroute_needed| MB
+    MB -->|reroute_needed| Supervisor
+    Citation -->|citation_suggestion| MB
+    Synthesis -->|gap_identified| MB
+    MB -->|gap_identified| Search
 ```
 
 ---
 
-## 8. Implementation Roadmap
+## Summary
 
-### Phase 1: Foundation (Week 1-2)
+ScholarFlow implements a **sophisticated multi-agent AI system** using LangGraph that goes far beyond simple sequential LLM chains:
 
-#### Task 1.1: Add Agent Message Bus
-- [ ] Create `AgentMessageBus` class
-- [ ] Integrate into ResearchState
-- [ ] Add publish/subscribe methods to base agents
-- [ ] Test with 2 agents (Writer ←→ Citation)
-
-#### Task 1.2: Implement Parallel Execution
-- [ ] Add ParallelNode for synthesis + citation + validator
-- [ ] Test parallel paper analysis
-- [ ] Measure performance improvement
-
-#### Task 1.3: Add Workflow Monitor
-- [ ] Create `workflow_monitor_node`
-- [ ] Track agent progress
-- [ ] Detect stuck states
-- [ ] Log decision points
-
----
-
-### Phase 2: Dynamic Routing (Week 3-4)
-
-#### Task 2.1: Inter-Path Edges
-- [ ] Add Writer → Search edge
-- [ ] Add Synthesis → Search edge
-- [ ] Add Reviewer → Planner edge
-- [ ] Test cross-path transitions
-
-#### Task 2.2: Dynamic Routing Functions
-- [ ] Implement `route_from_writer()`
-- [ ] Implement `route_from_synthesis()`
-- [ ] Implement `route_from_citation()`
-- [ ] Add routing tests
-
-#### Task 2.3: Conditional Entry Points
-- [ ] Add entry point selector
-- [ ] Support direct agent invocation
-- [ ] Test "add citation" flow
-
----
-
-### Phase 3: Advanced Features (Week 5-6)
-
-#### Task 3.1: State Branching
-- [ ] Implement state fork/merge
-- [ ] Support "what-if" exploration
-- [ ] Add state comparison
-
-#### Task 3.2: Interrupt & Resume
-- [ ] Add workflow pause/resume
-- [ ] Persist state to database
-- [ ] Test long-running workflows
-
-#### Task 3.3: Learning & Adaptation
-- [ ] Track successful routing decisions
-- [ ] Adjust weights based on outcomes
-- [ ] Implement basic RL for routing
-
----
-
-### Phase 4: Testing & Optimization (Week 7-8)
-
-#### Task 4.1: Comprehensive Testing
-- [ ] Unit tests for all new nodes
-- [ ] Integration tests for cross-path flows
-- [ ] Performance benchmarks
-- [ ] Load testing
-
-#### Task 4.2: Optimization
-- [ ] Profile slow nodes
-- [ ] Optimize state size
-- [ ] Cache expensive operations
-- [ ] Parallel where possible
-
-#### Task 4.3: Documentation
-- [ ] Update architecture docs
-- [ ] Add workflow diagrams
-- [ ] Create examples
-- [ ] Write migration guide
-
----
-
-## 9. Success Metrics
-
-### Performance Metrics
-
-| Metric | Current | Target | How to Measure |
-|--------|---------|--------|----------------|
-| **Time to Complete Search** | 15s | 8s | Parallel search execution |
-| **Draft Generation Time** | 30s | 25s | Concurrent synthesis + citation |
-| **Cross-Path Transitions** | 0 | 5+ per session | Track routing decisions |
-| **Agent Communication** | 0 | 10+ per session | Count message bus events |
-| **Parallel Executions** | 0 | 3+ per workflow | Monitor ParallelNode usage |
-
-### Quality Metrics
-
-| Metric | Current | Target | How to Measure |
-|--------|---------|--------|----------------|
-| **Relevant Papers Found** | 70% | 85% | User feedback + relevance scores |
-| **Citation Coverage** | 60% | 90% | Claims with citations |
-| **Draft Revision Loops** | 2.5 avg | 1.5 avg | Track revision count |
-| **User Workflow Interruptions** | 8 per session | 3 per session | User must manually search/cite |
-
-### User Experience Metrics
-
-| Metric | Current | Target | How to Measure |
-|--------|---------|--------|----------------|
-| **Workflow Adaptability** | Low | High | "System adapted to my needs" (survey) |
-| **Perceived Intelligence** | Medium | High | "Felt like collaborative assistant" |
-| **Frustration Events** | 5 per session | 1 per session | "Had to redo work" |
-
----
-
-## 10. Conclusion
-
-### Key Takeaways
-
-1. **Current System is Good, But Not Optimal for Research**
-   - ✅ Has cyclic loops (better than linear)
-   - ⚠️ Still somewhat rigid within intent paths
-   - ❌ Doesn't match non-linear nature of research
-
-2. **Research Requires True Non-Linearity**
-   - Researchers jump between stages
-   - Need ability to pause, explore, and resume
-   - Requires dynamic adaptation
-
-3. **Recommended Improvements**
-   - **High Priority:** Inter-path edges, parallel execution
-   - **Medium Priority:** Agent communication, dynamic routing
-   - **Low Priority:** State branching, multi-entry
-
-4. **LangGraph is the Right Tool**
-   - Designed for complex, non-linear workflows
-   - Native support for cycles and conditions
-   - Can handle all recommended improvements
-
-### Final Recommendation
-
-**Implement Phase 1 & 2 (6 weeks)** to achieve:
-- ✅ 40% faster workflows (parallel execution)
-- ✅ True non-linear research patterns (cross-path edges)
-- ✅ Intelligent agent collaboration (message bus)
-
-This will transform ScholarFlow from a "sophisticated linear system" to a "truly adaptive research assistant."
-
----
-
-## Appendix A: Graph Visualization Code
-
-```python
-def visualize_graph():
-    """Generate PNG visualization of LangGraph"""
-    from langgraph.graph import StateGraph
-    from app.agents.graph import create_research_graph
-    
-    graph = create_research_graph()
-    
-    # Generate Mermaid diagram
-    mermaid = graph.get_graph().draw_mermaid()
-    
-    # Or generate PNG
-    png_bytes = graph.get_graph().draw_png()
-    with open("langgraph_structure.png", "wb") as f:
-        f.write(png_bytes)
-```
-
----
-
-## Appendix B: Current State Fields
-
-```python
-# Complete ResearchState structure
-class ResearchState(TypedDict):
-    # Core (9 fields)
-    messages: List[BaseMessage]
-    query: str
-    project_id: str
-    intent: str
-    error: str
-    logs: List[Dict]
-    
-    # Discovery (5 fields)
-    found_papers: List[Dict]
-    ranked_papers: List[Dict]
-    selected_paper_ids: List[str]
-    search_iteration: int
-    refined_query: str
-    
-    # Drafting (6 fields)
-    current_draft: Dict
-    current_section: str
-    critique_feedback: str
-    revision_count: int
-    needs_revision: bool
-    papers_to_save: List[Dict]
-    
-    # Lab/Research (4 fields)
-    lab_asset_ids: List[str]
-    lab_asset_descriptions: List[str]
-    research_asset_ids: List[str]
-    research_asset_descriptions: List[str]
-    
-    # Multi-Agent (15 fields)
-    active_agent: str
-    agent_history: List[Dict]
-    supervisor_decision: Dict
-    conversation_memory: List[Dict]
-    research_insights: Dict
-    user_preferences: Dict
-    citations_used: Dict
-    bibliography: List[Dict]
-    citation_suggestions: List[Dict]
-    next_actions: List[Dict]
-    quality_feedback: Dict
-    synthesis_summary: str
-    comparative_analysis: Dict
-    
-    # NEW (Proposed - 3 fields)
-    agent_messages: List[Dict]  # Message bus
-    workflow_state: str  # "running" | "paused" | "complete"
-    routing_history: List[Dict]  # Track decisions
-
-# TOTAL: 42 fields → 45 fields
-```
-
----
-
-**Document Version:** 1.0  
-**Last Updated:** January 29, 2026  
-**Author:** ScholarFlow Development Team
+- **18 graph nodes** with **dynamic conditional routing** enabling non-linear workflows
+- **6 specialist agents** (Supervisor, Memory, Citation, Coordinator, Proactive, Synthesis) with distinct responsibilities
+- **Pub/sub message bus** for direct agent-to-agent communication
+- **Self-healing workflow monitor** that detects stuck states and suggests re-routing
+- **Performance optimizations** including fast paths, batch scoring, response caching, and streaming
+- **RAG grounding** ensures all responses are evidence-based with proper citations
+- **Section-aware writing** with intelligent context blending between literature and research data
+- **Full-stack integration** connecting LangGraph backend to a React frontend with real-time SSE streaming and interactive AI avatar
