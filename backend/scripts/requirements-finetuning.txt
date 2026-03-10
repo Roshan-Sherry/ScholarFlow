@@ -14,7 +14,11 @@ accelerate>=0.24.0
 
 # Data collection
 arxiv>=1.4.8
+PyPDF2>=3.0.0
 
 # Utilities
 scipy
 bitsandbytes
+
+# For QASPER dataset loading
+huggingface_hub>=0.20.0
